@@ -1,0 +1,169 @@
+//go:build integration
+
+package kind_test
+
+import (
+	"context"
+	"encoding/json"
+	"slices"
+	"testing"
+	"time"
+
+	"sigs.k8s.io/kind/pkg/cluster"
+	"sigs.k8s.io/kind/pkg/log"
+
+	kindaddon "github.com/stolostron/ocm-fleet/server/internal/addon/kind"
+	"github.com/stolostron/ocm-fleet/server/internal/application"
+	"github.com/stolostron/ocm-fleet/server/internal/domain"
+	"github.com/stolostron/ocm-fleet/server/internal/infrastructure/delivery"
+	"github.com/stolostron/ocm-fleet/server/internal/infrastructure/memworkflow"
+	"github.com/stolostron/ocm-fleet/server/internal/infrastructure/sqlite"
+)
+
+// TestKindAddon_RealDocker exercises the full addon lifecycle against
+// a real Docker daemon. It creates a kind cluster, verifies it exists,
+// then tears it down. Skipped when Docker is not available.
+// Requires -tags integration.
+func TestKindAddon_RealDocker(t *testing.T) {
+	checker := cluster.NewProvider()
+
+	if _, err := checker.List(); err != nil {
+		t.Skipf("Docker not available: %v", err)
+	}
+
+	const resourceID = "ocm-fleet-test"
+	kindName := encodedKindName(resourceID)
+
+	t.Cleanup(func() {
+		_ = checker.Delete(kindName, "")
+		// Also remove a pre-ownership bare name left by older test runs.
+		_ = checker.Delete(resourceID, "")
+	})
+	// Pre-clean in case a previous run left a stale cluster.
+	_ = checker.Delete(kindName, "")
+	_ = checker.Delete(resourceID, "")
+
+	db := sqlite.OpenTestDB(t)
+	store := &sqlite.Store{DB: db}
+
+	reg := &memworkflow.Registry{}
+	reporter := buildReporter(store, reg)
+
+	kindAgent := kindaddon.NewAgent(reporter, func(logger log.Logger) kindaddon.ClusterProvider {
+		return cluster.NewProvider(cluster.ProviderWithLogger(logger))
+	})
+	router := delivery.NewRoutingDeliveryService()
+	router.Register(kindaddon.TargetType, kindAgent)
+
+	orchSpec := domain.NewOrchestrationWorkflowSpec(
+		store, router, domain.StrategyFactory{Store: store}, reg,
+	)
+	orchWf, err := reg.RegisterOrchestration(orchSpec)
+	if err != nil {
+		t.Fatalf("RegisterOrchestration: %v", err)
+	}
+
+	cwfSpec := &domain.CreateDeploymentWorkflowSpec{
+		Store:         store,
+		Orchestration: orchWf,
+	}
+	createWf, err := reg.RegisterCreateDeployment(cwfSpec)
+	if err != nil {
+		t.Fatalf("RegisterCreateDeployment: %v", err)
+	}
+
+	cleanupSpec := &domain.DeleteDeploymentCleanupWorkflowSpec{Store: store}
+	cleanupWf, err := reg.RegisterDeleteDeploymentCleanup(cleanupSpec)
+	if err != nil {
+		t.Fatalf("RegisterDeleteDeploymentCleanup: %v", err)
+	}
+
+	deleteSpec := &domain.DeleteDeploymentWorkflowSpec{
+		Store:         store,
+		Orchestration: orchWf,
+		Cleanup:       cleanupWf,
+	}
+	deleteWf, err := reg.RegisterDeleteDeployment(deleteSpec)
+	if err != nil {
+		t.Fatalf("RegisterDeleteDeployment: %v", err)
+	}
+
+	resumeSpec := &domain.ResumeDeploymentWorkflowSpec{
+		Store:         store,
+		Orchestration: orchWf,
+	}
+	resumeWf, err := reg.RegisterResumeDeployment(resumeSpec)
+	if err != nil {
+		t.Fatalf("RegisterResumeDeployment: %v", err)
+	}
+
+	targetSvc := &application.TargetService{Store: store}
+	deploySvc := &application.DeploymentService{
+		Store:    store,
+		CreateWF: createWf,
+		DeleteWF: deleteWf,
+		ResumeWF: resumeWf,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	if err := targetSvc.Register(ctx, domain.TargetInfoFromSnapshot(domain.TargetInfoSnapshot{
+		ID:   "kind-docker",
+		Type: kindaddon.TargetType,
+		Name: "Docker Kind Provider",
+	})); err != nil {
+		t.Fatalf("Register target: %v", err)
+	}
+
+	spec := kindaddon.ClusterSpec{Name: resourceID}
+	specBytes, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatalf("marshal spec: %v", err)
+	}
+
+	_, err = deploySvc.Create(ctx, domain.CreateDeploymentInput{
+		Name: "deployments/kind-docker-deploy",
+		ManifestStrategy: domain.ManifestStrategySpec{
+			Type: domain.ManifestStrategyInline,
+			Manifests: []domain.Manifest{{
+				ManifestType: kindaddon.ClusterManifestType,
+				Raw:          json.RawMessage(specBytes),
+			}},
+		},
+		PlacementStrategy: domain.PlacementStrategySpec{
+			Type:    domain.PlacementStrategyStatic,
+			Targets: []domain.TargetID{"kind-docker"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create deployment: %v", err)
+	}
+
+	view := awaitState(ctx, t, store, "deployments/kind-docker-deploy", domain.FulfillmentStateActive)
+	if len(view.Fulfillment.ResolvedTargets()) != 1 || view.Fulfillment.ResolvedTargets()[0] != "kind-docker" {
+		t.Fatalf("unexpected ResolvedTargets: %v", view.Fulfillment.ResolvedTargets())
+	}
+
+	// Delivery is async; poll until the cluster appears or context expires.
+	for {
+		clusters, err := checker.List()
+		if err != nil {
+			t.Fatalf("provider.List: %v", err)
+		}
+		if slices.Contains(clusters, kindName) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for kind cluster %q to be created", kindName)
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+// encodedKindName is the ownership-encoded kind/docker name for a
+// platform resource ID (ocm-fleet--{id}).
+func encodedKindName(resourceID string) string {
+	return "ocm-fleet--" + resourceID
+}

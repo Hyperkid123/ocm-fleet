@@ -1,0 +1,122 @@
+package sqlite_test
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stolostron/ocm-fleet/server/internal/domain"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/authmethodrepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/deliveryrepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/deploymentrepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/extensionresourcerepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/fulfillmentrepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/inventoryrepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/resourceidentityrepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/storetest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/targetrepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/infrastructure/sqlite"
+)
+
+func beginTestTx(t *testing.T) *sqlite.Store {
+	t.Helper()
+	db := sqlite.OpenTestDB(t)
+	return &sqlite.Store{DB: db}
+}
+
+func TestTargetRepo(t *testing.T) {
+	targetrepotest.Run(t, func(t *testing.T) domain.TargetRepository {
+		store := beginTestTx(t)
+		tx, err := store.Begin(context.Background())
+		if err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+		t.Cleanup(func() { tx.Rollback() })
+		return tx.Targets()
+	})
+}
+
+func TestDeploymentRepo(t *testing.T) {
+	deploymentrepotest.Run(t, func(t *testing.T) domain.Tx {
+		store := beginTestTx(t)
+		tx, err := store.Begin(context.Background())
+		if err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+		t.Cleanup(func() { tx.Rollback() })
+		return tx
+	})
+}
+
+func TestFulfillmentRepo(t *testing.T) {
+	fulfillmentrepotest.Run(t, func(t *testing.T) domain.FulfillmentRepository {
+		store := beginTestTx(t)
+		tx, err := store.Begin(context.Background())
+		if err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+		t.Cleanup(func() { tx.Rollback() })
+		return tx.Fulfillments()
+	})
+}
+
+func TestDeliveryRepo(t *testing.T) {
+	deliveryrepotest.Run(t, func(t *testing.T) domain.DeliveryRepository {
+		store := beginTestTx(t)
+		tx, err := store.Begin(context.Background())
+		if err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+		t.Cleanup(func() { tx.Rollback() })
+		return tx.Deliveries()
+	})
+}
+
+func TestInventoryRepo(t *testing.T) {
+	inventoryrepotest.Run(t, func(t *testing.T) domain.InventoryRepository {
+		store := beginTestTx(t)
+		tx, err := store.Begin(context.Background())
+		if err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+		t.Cleanup(func() { tx.Rollback() })
+		return tx.Inventory()
+	})
+}
+
+func TestStore(t *testing.T) {
+	storetest.Run(t, func(t *testing.T) domain.Store {
+		db := sqlite.OpenTestDB(t)
+		return &sqlite.Store{DB: db}
+	})
+}
+
+func TestResourceIdentityRepo(t *testing.T) {
+	resourceidentityrepotest.Run(t, func(t *testing.T) domain.Tx {
+		store := beginTestTx(t)
+		tx, err := store.Begin(context.Background())
+		if err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+		t.Cleanup(func() { tx.Rollback() })
+		return tx
+	})
+}
+
+func TestExtensionResourceRepo(t *testing.T) {
+	extensionresourcerepotest.Run(t, func(t *testing.T) domain.Tx {
+		store := beginTestTx(t)
+		tx, err := store.Begin(context.Background())
+		if err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+		t.Cleanup(func() { tx.Rollback() })
+		return tx
+	})
+}
+
+func TestAuthMethodRepo(t *testing.T) {
+	authmethodrepotest.Run(t, func(t *testing.T) domain.AuthMethodRepository {
+		db := sqlite.OpenTestDB(t)
+		return &sqlite.AuthMethodRepo{DB: db}
+	})
+}

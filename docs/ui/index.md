@@ -1,0 +1,37 @@
+# OCM Fleet console documentation
+
+## Console scope
+
+The console is the browser application for the experimental OCM Fleet platform. It is a multi-cluster management UI that dynamically composes its interface based on the capabilities of connected Kubernetes clusters.
+
+See the [architecture glossary](../design/glossary.md) for shared project names
+and component boundaries.
+
+## Goals
+
+- **Dynamic UI composition** — the UI discovers what each cluster supports and loads only the relevant plugin UIs. Adding a new cluster with new capabilities should automatically surface new UI sections without code changes to the shell.
+- **Graceful growth** — the system must work for 1 cluster and scale gracefully as the number of integrated clusters grows to tens or hundreds. The architecture (plugin loading, data fetching, navigation) should not degrade as clusters are added.
+- **Plugin-based extensibility** — all cluster-specific UI is delivered through plugins loaded at runtime via Module Federation. The shell is generic; plugins bring the domain knowledge.
+- **Multi-platform support** — supports Kubernetes distributions, detecting platform-specific capabilities (e.g. ConsolePlugins, Routes) where available.
+
+## Design
+
+- [Feature Contracts](./feature-contracts.md) — extension types, search indexing, feature graph
+- [Module Groups](./module-groups.md) — nested navigation, hierarchical search, grouped routes
+- [Extension Validation](./extension-validation.md) — runtime trust boundary for cross-plugin extensions
+
+## Non-Goals
+
+- **Authentication and authorization** — handled elsewhere in the platform, outside the UI design described here. Any auth-related prototypes discussed here (mock login, user switching, bearer tokens) exists purely for experimentation purposes and should not be taken as a design choice or requirement.
+- **API aggregation** — also handled elsewhere in the platform. This documentation focuses on the UI layer. Any API proxy or data-fetching prototypes discussed here exists purely for experimentation purposes to make the UI functional during development and should not be taken as a design choice or requirement.
+
+## Requirements
+
+- [Plugin Discovery](./plugin-discovery.md) — how the platform detects which UI plugins to enable for each cluster
+- [OCP Plugin Re-use](./ocp-plugin-reuse.md) — optional integration for re-using existing OpenShift console plugins in the console
+- [Plugin Versioning](./plugin-versioning.md) — loading multiple versions of the same plugin from different clusters
+- [API Requirements](./api-requirements.md) — aggregate data layer and per-cluster drill-down proxy
+
+## Experimental
+
+- [Passkey & Grant Access](./passkey-grant-access.md) — WebAuthn-based identity verification flow

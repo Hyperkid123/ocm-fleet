@@ -1,0 +1,92 @@
+import type { ClusterResource, ResourceResult } from "@ocm-fleet/common";
+
+export interface ClusterRow {
+  result: ResourceResult<ClusterResource>;
+  id: string;
+  service: string;
+}
+
+const STATE_LABELS: Record<
+  string,
+  { text: string; color: "blue" | "green" | "orange" | "red" | "grey" }
+> = {
+  CREATING: { text: "Creating", color: "blue" },
+  ACTIVE: { text: "Active", color: "green" },
+  DELETING: { text: "Deleting", color: "orange" },
+  FAILED: { text: "Failed", color: "red" },
+  PAUSED_AUTH: { text: "Paused", color: "orange" },
+  RUNNING: { text: "Running", color: "green" },
+  PROVISIONING: { text: "Provisioning", color: "blue" },
+  ERROR: { text: "Error", color: "red" },
+  DEGRADED: { text: "Degraded", color: "orange" },
+};
+
+const DEFAULT_STATE_LABEL = { text: "Unknown", color: "grey" } as const;
+
+const HEALTHY_STATES = new Set(["ACTIVE", "RUNNING"]);
+const FAILURE_STATES = new Set(["ERROR", "DEGRADED", "FAILED"]);
+const TRANSIENT_STATES = new Set(["CREATING", "DELETING", "PROVISIONING"]);
+
+export function stateLabel(
+  state: string | undefined,
+  underlyingState?: string,
+) {
+  if (!state) return DEFAULT_STATE_LABEL;
+  const label = STATE_LABELS[state] ?? DEFAULT_STATE_LABEL;
+  if (state === "PAUSED_AUTH" && underlyingState) {
+    const base = STATE_LABELS[underlyingState];
+    if (base) {
+      return { ...label, text: `${base.text} (Paused)` };
+    }
+  }
+  return label;
+}
+
+export function isFailureState(state: string | undefined): boolean {
+  return !!state && FAILURE_STATES.has(state);
+}
+
+export function isTransientState(state: string | undefined): boolean {
+  return !!state && TRANSIENT_STATES.has(state);
+}
+
+export function formatTime(iso: string | undefined): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString();
+}
+
+export function extractService(canonicalName: string): string {
+  const match = canonicalName.match(/^\/\/([^/]+)\//);
+  return match?.[1] ?? "";
+}
+
+const SERVICE_LABELS: Record<string, string> = {
+  "kind.open-cluster-management.io": "Kind",
+  "kubernetes.open-cluster-management.io": "Kubernetes",
+};
+
+export function serviceLabel(service: string): string {
+  return SERVICE_LABELS[service] ?? service;
+}
+
+export function isHealthyState(state: string | undefined): boolean {
+  return !!state && HEALTHY_STATES.has(state);
+}
+
+export function buildAddonBasePath(service: string): string {
+  if (!Object.prototype.hasOwnProperty.call(SERVICE_LABELS, service)) {
+    throw new Error(`Unsupported cluster service: ${service}`);
+  }
+  return `/apis/${service}/v1alpha`;
+}
+
+export function deriveClusterState(
+  resource: ClusterResource,
+): string | undefined {
+  if (resource.pauseReason) return "PAUSED_AUTH";
+  if (resource.state) return resource.state;
+  const ready = resource.conditions?.Ready;
+  if (ready?.status === "True") return "RUNNING";
+  if (ready?.status === "False") return "ERROR";
+  return undefined;
+}

@@ -1,0 +1,97 @@
+package kind
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	rbacv1 "k8s.io/api/rbac/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/stolostron/ocm-fleet/server/internal/domain"
+)
+
+// OIDCSpec configures the K8s API server's OIDC authentication on a
+// kind cluster. The issuer URL and audience (client ID) are derived
+// from the caller's identity via [domain.DeliveryAuth]. CA trust for
+// the OIDC issuer is infrastructure config on the [Agent], not
+// per-cluster config.
+type OIDCSpec struct {
+	UsernameClaim string `json:"usernameClaim,omitempty"` // default: "sub"
+	GroupsClaim   string `json:"groupsClaim,omitempty"`   // default: "groups"
+}
+
+func (s *OIDCSpec) usernameClaim() string {
+	if s.UsernameClaim != "" {
+		return s.UsernameClaim
+	}
+	return "sub"
+}
+
+func (s *OIDCSpec) groupsClaim() string {
+	if s.GroupsClaim != "" {
+		return s.GroupsClaim
+	}
+	return "groups"
+}
+
+const oidcCACertContainerPath = "/etc/kubernetes/pki/oidc-ca.pem"
+
+// bootstrapRBAC grants the caller cluster-admin on the kind cluster.
+// Same-generation retries are idempotent: an existing binding is
+// verified and reconciled rather than treated as failure.
+func bootstrapRBAC(ctx context.Context, kubeconfig []byte, issuerURL domain.IssuerURL, caller *domain.SubjectClaims) error {
+	cfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
+	if err != nil {
+		return fmt.Errorf("parse kubeconfig: %w", err)
+	}
+	client, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("create kubernetes client: %w", err)
+	}
+	return ensureCallerAdminBinding(ctx, client, issuerURL, caller)
+}
+
+// ensureCallerAdminBinding creates or reconciles the caller's
+// cluster-admin ClusterRoleBinding.
+func ensureCallerAdminBinding(ctx context.Context, client kubernetes.Interface, issuerURL domain.IssuerURL, caller *domain.SubjectClaims) error {
+	// K8s OIDC authentication formats the username as "issuer#sub".
+	username := string(issuerURL) + "#" + string(caller.Subject)
+
+	desired := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ocm-fleet-admin-" + string(caller.Subject),
+		},
+		Subjects: []rbacv1.Subject{{
+			Kind:     "User",
+			Name:     username,
+			APIGroup: "rbac.authorization.k8s.io",
+		}},
+		RoleRef: rbacv1.RoleRef{
+			Kind:     "ClusterRole",
+			Name:     "cluster-admin",
+			APIGroup: "rbac.authorization.k8s.io",
+		},
+	}
+	if err := ensureClusterRoleBinding(ctx, client, desired); err != nil {
+		return fmt.Errorf("ensure ClusterRoleBinding for %q: %w", username, err)
+	}
+	return nil
+}
+
+// writeCABundle writes the CA bundle to a temp file and returns the path.
+func writeCABundle(caBundle []byte) (string, error) {
+	f, err := os.CreateTemp("", "kind-oidc-ca-*.pem")
+	if err != nil {
+		return "", fmt.Errorf("create CA bundle temp file: %w", err)
+	}
+	if _, err := f.Write(caBundle); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", fmt.Errorf("write CA bundle: %w", err)
+	}
+	f.Close()
+	return f.Name(), nil
+}

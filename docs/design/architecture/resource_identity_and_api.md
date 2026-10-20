@@ -1,0 +1,402 @@
+# Resource Identity and API Extension
+
+## What this doc covers
+
+The two-layer API model that separates canonical resource identity from extension-specific APIs:
+
+- the architectural rationale for separating platform identity from extension APIs
+- the platform resource: canonical identity, aggregated metadata, representations
+- extension resources and API packages: service naming, proto packaging, versioning
+- the resource identity model: claiming, correlation, aliases, conflict detection
+- representations and relationships: how extensions model the same identity
+- resource shapes taxonomy: managed, inventoried, target
+- HTTP transcoding for multi-package services
+- the inventory search API shape
+- aggregation semantics for labels and conditions
+
+## When to read this
+
+Read this when you need to understand how multiple extensions can model the same logical resource without name collisions, how the platform API relates to extension APIs, or how resource identity works across the system.
+
+## What is intentionally elsewhere
+
+- Core strategy vocabulary and fulfillment model: [core_model.md](core_model.md)
+- Managed resource lifecycle, fulfillment derivation, attestation: [../managed_resources.md](../managed_resources.md)
+- Addon lifecycle and schema activation mechanics: [addon_integration.md](addon_integration.md)
+- Fleet-wide indexing infrastructure and scale: [resource_indexing.md](resource_indexing.md)
+- Target delivery protocol and reliability: [target_delivery_contract.md](target_delivery_contract.md)
+
+## Related docs
+
+- [../architecture.md](../architecture.md)
+- [addon_integration.md](addon_integration.md)
+- [resource_indexing.md](resource_indexing.md)
+- [../managed_resources.md](../managed_resources.md)
+
+---
+
+## The two-layer API model
+
+### Problem
+
+Today, a managed resource extends a common gRPC service under a single proto package (`ocm.v1alpha`). There is no separation between a canonical resource identity and the extension that manages it. Once inventory reporting introduces multiple extensions that model some aspect of the same resource — read or write — this breaks down. Either resource paths collide, or the resource is named something else despite logically sharing a common identity.
+
+For example: a cluster may be provisioned by Kind, scanned by a vulnerability scanner, targeted for delivery by a Kubernetes agent, and monitored by an observability addon. These all refer to the same logical cluster. They each need typed, separately lifecycled, non-conflicting APIs — yet they must unite under a single canonical resource identity.
+
+### Solution: two layers
+
+The platform introduces API separation at both the transport (HTTP and gRPC) and architectural levels:
+
+1. **Platform API layer** — defines the canonical resource hierarchy and identity. Resource types have a place in this hierarchy regardless of which extension defines them. At this layer, the representation is generic: it tracks relationships, aggregates metadata, and correlates aliases. It is mostly read-only (labels are user-writable).
+2. **Extension API layer** — implements resource functionality through typed, extension-specific schemas. Extensions can observe, manage (mapping to a fulfillment), or provide delivery connectivity. Each extension registers services in its own proto package, differentiated at the transport level.
+
+The resource name (`clusters/foo`) is identity-equivalent across services when referring to the same logical resource. `//kind.open-cluster-management.io/clusters/foo` and `//open-cluster-management.io/clusters/foo` refer to the same logical resource through different APIs.
+
+```mermaid
+graph TB
+    subgraph platformLayer ["Platform Resources (canonical identity)"]
+        platformCluster["clusters/foo"]
+        platformVM["vms/bar"]
+    end
+
+    subgraph extLayer ["Extension Representations"]
+        kind["//kind.open-cluster-management.io/clusters/foo"]
+        k8s["//kubernetes.open-cluster-management.io/clusters/foo"]
+        security["//security.open-cluster-management.io/clusters/foo"]
+        virtualization["//virtualization.open-cluster-management.io/vms/bar"]
+    end
+
+    subgraph rolesLegend ["Representation Roles"]
+        managed["managed"]
+        inventory["inventory"]
+        target["target"]
+    end
+
+    platformCluster -->|representation| kind
+    platformCluster -->|representation| k8s
+    platformCluster -->|representation| security
+    kind -.->|roles| managed
+    kind -.->|roles| inventory
+    k8s -.->|roles| target
+    k8s -.->|roles| inventory
+    security -.->|roles| inventory
+    platformVM -->|representation| virtualization
+    virtualization -.->|roles| managed
+```
+
+
+
+---
+
+## Platform resource
+
+The platform resource is the canonical identity for a logical resource. Its message schema is generic and does not change as extensions are added, but the services (and thus HTTP paths) are dynamic — new resource types add new services.
+
+### Shape
+
+
+| Field              | Writability    | Description                                                                         |
+| ------------------ | -------------- | ----------------------------------------------------------------------------------- |
+| `name`             | Server-managed | AIP-122 resource name (e.g. `clusters/foo`); the sole identifier -- no `uid`        |
+| `labels`           | User-writable  | Direct user labels, declarative-friendly                                            |
+| `effective_labels` | Server-managed | Union of user labels and extension-contributed labels (namespaced), per AIP-129     |
+| `conditions`       | Server-managed | Aggregated from extension representations, namespaced by source                     |
+| `representations`  | Server-managed | References to extension resources modeling this identity, with their declared roles |
+| `aliases`          | Server-managed | Namespaced key:value pairs for alternate identifiers                                |
+| `relationships`    | Server-managed | Links to other platform resource identities (semantic relationships)                |
+
+
+### No surrogate UID
+
+Platform resources have no `uid` field at all — `name` is the sole, permanent identifier. This is allowed by AIP-122/148 (`uid` is explicitly optional), and it is a deliberate choice, not an omission: AIP-148's entire purpose for `uid` is distinguishing a resource from a *different* resource that later reuses the same name after deletion, but a platform resource has no coherent notion of "this specific incarnation" to distinguish. It is a metadata shell aggregating representations across multiple extension resources with independent lifecycles — one service's representation can disappear and reappear (e.g. a transient scrape gap) without that meaning "a new identity now exists." There is no well-defined generation boundary to mint a UID against, so none is minted.
+
+Extension resources (the representations underneath a platform resource) keep their own `uid` — AIP-148 semantics genuinely apply there, since delete/recreate under the same name is a real, observable event with clear boundaries (e.g. a Kubernetes object's replacement).
+
+### Materialization
+
+Platform resources are **virtual**: a resource name is visible through the platform API as soon as *anything* backs it — a live extension resource representation, a registered alias, or an explicit `Create`/label attachment — with no independent physical row required (unless an optimization–the API is decoupled from this). Reads derive the platform resource from whatever backing data exists for that name.
+
+Thus, there is no explicit _delete_ or _create_ operation for a platform resource. It exists so long as there is a reference across all service names. It is gone when there is none.
+
+TODO: Consider history / retention – that may keep it around in a different state?
+
+### Platform-wide, user-managed state
+
+Users may desire to add labels, IAM policies, or other state, about a cluster that was just imported, or yet to be managed (somewhat equivalent to eagerly creating a ManagedCluster resource). This should be its own service, separate from the "platform resource" service, so that it can have its own AIP-compatible, "declarative-friendly" state.
+
+
+### Dynamic service registration
+
+Services for platform resources are dynamic. When a new resource type is installed (e.g., `clusters`, `vms`), the platform registers a corresponding platform service with the generic message shape. The service provides standard CRUD operations (Create, Get, List, Delete) scoped to the platform resource fields.
+
+---
+
+## Extension resources and API packages
+
+Extensions define typed APIs as service extensions. Each addon chooses its own naming, independently of the platform.
+
+### Service name (AIP-122, versionless)
+
+The **service name** is the identifier used in full resource names. It is versionless and open-ended. Addons choose their own service names; the platform imposes no naming convention beyond uniqueness.
+
+Examples:
+
+- `kind.open-cluster-management.io` — first-party Kind addon
+- `kubernetes.open-cluster-management.io` — first-party Kubernetes addon
+- `clusters.acme.com` — third-party addon
+
+### Proto package (versioned)
+
+The **proto package** follows standard proto conventions and includes the version:
+
+- `ocm.kind.v1alpha`
+- `ocm.kubernetes.v1alpha`
+- `acme.clusters.v1`
+
+gRPC service names follow proto conventions: `{proto_package}.{Singular}Service` (e.g., `ocm.kind.v1alpha.ClusterService`).
+
+### Full resource names (AIP-122)
+
+Full resource names use the versionless service name:
+
+```
+//kind.open-cluster-management.io/clusters/foo
+//kubernetes.open-cluster-management.io/clusters/foo
+//open-cluster-management.io/clusters/foo
+```
+
+The resource name (`clusters/foo`) is identity-equivalent across services when referring to the same logical resource.
+
+### URLs (AIP-127)
+
+URLs include the version per AIP-127 transcoding:
+
+```
+/apis/kind.open-cluster-management.io/v1alpha/clusters/foo
+/apis/kubernetes.open-cluster-management.io/v1alpha/clusters/foo
+/apis/open-cluster-management.io/v1alpha/clusters/foo
+```
+
+### Versioning
+
+Versioning is defined separately from the service name. An addon registers a service name once, and versions its proto package and URL paths independently. Resource names remain stable across API version evolution because the service name is versionless.
+
+---
+
+## Resource identity model
+
+### Naming types (AIP-122)
+
+The implementation's naming types mirror AIP-122 terminology:
+
+| Type               | Example                            | Description                                                           |
+| ------------------ | ---------------------------------- | --------------------------------------------------------------------- |
+| `ResourceID`       | `foo`                              | Leaf segment identifier (rarely used in isolation)                    |
+| `ResourceName`     | `clusters/foo`                     | Collection-qualified resource name; the primary identity type         |
+| `FullResourceName` | `//kind.open-cluster-management.io/clusters/foo` | Globally unique including service; used in attestation and cross-service references |
+| `CollectionID`     | `clusters`                         | Single collection segment (rarely used in isolation)                  |
+| `CollectionName`   | `clusters`                         | Full path to a collection; generalizes to hierarchical names          |
+
+`ResourceName` is the standard currency for domain APIs. `ResourceID` is used only at boundaries (e.g. parsing a resource name from an HTTP path segment). The current implementation is flat (`clusters/foo`), but `CollectionName` and `ResourceName` do not structurally prevent future hierarchy.
+
+### Identity uniqueness
+
+A resource name is unique within a **platform identity domain**. Extension collections participate in that domain only when their resource type registration maps them to the corresponding platform resource type.
+
+Once `clusters/foo` exists, it is one logical resource regardless of how many extensions define APIs for it.
+
+At the extension level, the unique key for an extension resource is `(service_name, resource_name)` — the full resource name. The type name is metadata about the resource, not a namespace for it: you cannot have two resources with the same full resource name, regardless of type.
+
+### Claiming protocol
+
+TODO: We'll want to make sure there is only one _managed_ resource per name, to avoid having to define "multiple things manage this" semantics.
+
+### Aliases
+
+Aliases are namespaced key:value pairs for alternate identifiers. They enable cross-extension correlation when the canonical name is not known.
+
+Examples:
+
+- `acmecloud/project-id:my-project/cluster-id:abc123`
+- `sig-multicluster/cluster-id:550e8400-e29b-41d4-a716-446655440000`
+- `acmesecurity/cluster-id:scanner-12345`
+
+See pocs/ for various alias approaches.
+
+Aliases are to be resolved asynchronously. Conflicts should be surfaced to users and in the API.
+
+As alises resolve, they should appear in platform resource representations list, categorized by whether they are "accepted" (no conflict), "pending" (not yet processed), "conflicting".
+
+### Conflict detection
+
+This section describes conflict detection for the accepted-alias/direct-assertion path above. Inventory reporting's own aliases (see "Reported aliases" above) have no equivalent synchronous check today -- see that section's "accepted not rejected" behavior.
+
+Multiple extensions defining the same resource name is expected and correct — they unify on the same identity. Name sharing across extension representations is expected when the representations are registered into the same platform identity domain.
+
+Conflicts arise from:
+
+- **Value claimed by a different resource**: extension A asserts `clusters/foo` has `kube-system-ns-uid=1` while extension B asserts `clusters/bar` also has `kube-system-ns-uid=1` — regardless of which extension resource(s) contributed either claim.
+- **Resource has a different value for the same key**: an extension resource representing `clusters/foo` already has `kube-system-ns-uid=1` on file, and a *different* extension resource also representing `clusters/foo` reports `kube-system-ns-uid=2` for the same key — rejected. This does not fire when the same extension resource that originally set `kube-system-ns-uid=1` reports a new value itself; that's a replace of its own contribution, not a conflict, unless another extension resource representing `clusters/foo` is still asserting the old value.
+- **Unauthorized identity claims**: an extension attempts to claim a resource name without authorization.
+- **Multiple identity binding**: an extension resource attempts to bind to multiple platform identities.
+
+---
+
+## Representations and relationships
+
+### Terminology
+
+- A **platform resource** is the canonical identity for a logical resource.
+- An **extension representation** is an extension API resource that represents the same platform identity through a typed, extension-specific schema.
+- Each representation declares one or more **representation roles** (`managed`, `inventory`, `target`).
+- Representations are not semantic relationships; they are typed API surfaces for the same identity.
+
+### Extension representations
+
+The platform resource tracks its representations. Each representation's roles come from the extension resource **type definition**, which declares independent capability axes. Management and inventory compose: a type may declare either, both, or (with target) any combination the addon needs. "Managed-only" and "inventory-only" are useful names for common combinations, not separate resource kinds.
+
+
+| Role        | Description                                                         | Composition                                              |
+| ----------- | ------------------------------------------------------------------- | -------------------------------------------------------- |
+| `managed`   | The extension resource has a writable spec driving a fulfillment    | Composes with `inventory` and/or `target`                |
+| `inventory` | The extension resource reports observed state                       | Composes with `managed` and/or `target`                  |
+| `target`    | The extension resource provides delivery connectivity configuration | Composes with `managed` and/or `inventory`               |
+
+
+For example, `//kubernetes.open-cluster-management.io/clusters/foo` might declare roles: `target`, `inventory`. A provisioning addon might declare `managed` and `inventory` on the same type so one extension resource carries both intent and observed state.
+
+Example: platform resource `clusters/foo` has representations:
+
+- `//kind.open-cluster-management.io/clusters/foo` — roles: `managed`, `inventory`
+- `//kubernetes.open-cluster-management.io/clusters/foo` — roles: `target`, `inventory`
+- `//security.open-cluster-management.io/clusters/foo` — roles: `inventory`
+
+### Semantic relationships
+
+Semantic relationships are links between different **platform resource identities**. They connect distinct logical resources, not typed API surfaces for the same identity.
+
+Examples:
+
+- Pod → Service
+- Container → Image
+- Node → Cluster
+
+These are modeled generically on the platform resource (repeated field or map), not requiring message schema extension.
+
+Open question: whether semantic relationships should be schema-extended per resource type or remain generic.
+
+---
+
+## Resource shapes taxonomy
+
+Extension resources are shaped by the capability axes their type definition declares. The labels below name common combinations; they are not separate APIs or mutually exclusive kinds. A single extension resource can declare any combination of management, inventory, and (later) target.
+
+### Managed resource
+
+A managed resource declares the management axis: a writable `spec` that drives a fulfillment, plus management fields (intent version, fulfillment lifecycle, provenance, generation). Extension `labels` are user-writable on management-capable types. See [../managed_resources.md](../managed_resources.md) for the full design.
+
+### Inventoried resource
+
+An inventoried resource declares the inventory axis: it reports observed state. Inventory-only types have no writable `spec` and no fulfillment; they are read-only from the user's perspective and are reported by addons. Types that also declare management carry the same observed-state fields on the same resource.
+
+### Target resource
+
+A target resource provides configuration for delivery connectivity. It has extension-defined schema and is declarative-friendly (can be managed by GitOps tooling or operator configuration).
+
+### Common envelope and capability fields
+
+Every activated extension resource shares a common envelope: identity (`name`, `uid`), extension `labels`, resource timestamps (`create_time`, `update_time`), and `etag`.
+
+Capability fields are additive on that envelope:
+
+- **Management** (when declared): `spec`, intent version, fulfillment lifecycle fields, provenance, generation, and writable extension `labels`.
+- **Inventory** (when declared): inlined observed-state fields — `local_labels`, `conditions`, `observation`, `local_update_time`, `index_update_time`. These use real-world wire names (not inventory-prefixed) and are the same whether or not management is also declared. They are distinct from fulfillment lifecycle fields and from user-writable extension `labels`.
+
+A single extension resource can combine axes. For example, `//kubernetes.open-cluster-management.io/clusters/foo` can be both a target and an inventory reporter; a provisioning type can be managed and inventory-capable on one message.
+
+Stable generated values that should appear in the indexed projection are modeled as `properties`; see [resource_indexing.md](resource_indexing.md#inventory-item-shape).
+
+---
+
+## HTTP transcoding
+
+Multiple extension services coexist on one HTTP server. Since different proto packages produce different gRPC service names, gRPC routing works naturally. HTTP requires explicit path differentiation.
+
+### Path scheme
+
+```
+/apis/{service_name}/{version}/{resource_path}
+```
+
+Examples:
+
+- `/apis/kind.open-cluster-management.io/v1alpha/clusters/foo`
+- `/apis/kubernetes.open-cluster-management.io/v1alpha/clusters/foo`
+- `/apis/open-cluster-management.io/v1alpha/clusters/foo`
+
+The platform API may also be accessible at a short alias (e.g. `/v1alpha/clusters/foo`).
+
+### gRPC
+
+gRPC is already differentiated by fully-qualified service name in the proto package. No change is needed beyond supporting addon packages. The `DynamicServiceMux` routes by service name as it does today.
+
+### Open question
+
+Whether to support a short-form path for a "default" service context (the platform API), allowing `/v1alpha/clusters/foo` as a shortcut for `/apis/open-cluster-management.io/v1alpha/clusters/foo`.
+
+---
+
+## Inventory search API
+
+The inventory search API provides cross-cutting fleet-wide discovery and aggregation across resource shapes. That surface is `queryResources` — coverage starts with activated extension resources and grows to include platform aggregates and other inventory-held shapes.
+
+`queryResources` returns the same platform-held resource data as typed Get/List for matching hits. Selectivity is in what reporters extract into inventory, not in the query surface being a thinner view of those resources.
+
+### Shape
+
+A custom GET method on the platform API surface over an arbitrary scope:
+
+```
+GET /apis/open-cluster-management.io/v1alpha/{scope}:queryResources?filter={cel_expression}
+```
+
+- **Scope**: a cluster, a workspace, the whole platform, or any other level of the resource hierarchy.
+- **Filter**: a CEL expression over the result envelope (identity and resource body).
+- **Pagination**: follows AIP conventions.
+
+If the platform later standardizes a short-form alias for its own API, the same method could also be exposed at `/v1alpha/{scope}:queryResources`.
+
+See [resource_indexing.md](resource_indexing.md#search-api-shape) for filter/response shape and how coverage expands. For live objects on a target beyond what was reported, use API proxying or addon-specific APIs — not a deeper read of the same platform resources.
+
+---
+
+## Aggregation semantics
+
+The platform resource aggregates metadata from its extension representations.
+
+### Labels
+
+Labels are a union with namespace prefixes. `effective_labels` merges:
+
+- **User-set labels** (unnamespaced): set directly on the platform resource via its `labels` field.
+- **Extension-contributed labels** (namespaced): contributed by extension representations, prefixed with `{addon_id}/{key}`.
+
+This follows AIP-129 for the `labels` / `effective_labels` split.
+
+### Conditions
+
+Conditions are additive and namespaced by source extension. Each condition carries its source extension as metadata.
+
+No implicit synthetic rollup condition is generated. Source conditions remain authoritative. Any future rollup is an explicitly registered derived projection.
+
+---
+
+## Open questions
+
+1. **Semantic relationship extensibility**: whether semantic relationships dynamically extend the platform resource message or remain generic (repeated field / map).
+2. **Observed-state model rework**: the current `properties` vs `observations` split may collapse into a unified observation model. Current documents use `properties` for the stable-value bucket; whether that remains distinct from `observations` is deferred to a separate design effort.
+3. **Extension API versioning mechanics**: service name is stable; proto package and URL version evolve independently. The exact mechanics of multi-version coexistence need specification.
+4. **Short-form HTTP path aliases**: whether `/v1alpha/clusters/foo` serves as an alias for `/apis/open-cluster-management.io/v1alpha/clusters/foo`.
+5. **Pre-created identity persistence**: whether platform resources that were pre-created (before any extension resource existed) have stronger persistence guarantees against extension-initiated deletion.
+
+

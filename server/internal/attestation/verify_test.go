@@ -1,0 +1,423 @@
+package attestation_test
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stolostron/ocm-fleet/server/internal/attestation"
+	"github.com/stolostron/ocm-fleet/server/internal/domain"
+	"github.com/stolostron/ocm-fleet/server/internal/infrastructure/keyregistry"
+	"github.com/stolostron/ocm-fleet/server/internal/infrastructure/oidc/oidctest"
+)
+
+type testHarness struct {
+	provider        *oidctest.Provider
+	privKey         *ecdsa.PrivateKey
+	signerID        domain.SubjectID
+	issuer          domain.IssuerURL
+	identityToken   string
+	registrySubject domain.RegistrySubject
+	fakeReg         *keyregistry.Fake
+	verifier        *attestation.Verifier
+}
+
+func setupHarness(t *testing.T) *testHarness {
+	t.Helper()
+
+	provider := oidctest.Start(t, oidctest.WithAudience("ocm-fleet-enroll"))
+
+	signerID := domain.SubjectID("test-user")
+	issuer := provider.IssuerURL()
+	registrySubject := domain.RegistrySubject("gh-test-user")
+
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	identityToken := provider.IssueToken(t, oidctest.TokenClaims{
+		Subject:  string(signerID),
+		Audience: "ocm-fleet-enroll",
+		Extra:    map[string]any{"preferred_username": registrySubject},
+	})
+
+	fakeReg := keyregistry.NewFake()
+	fakeReg.Register("https://api.github.com", registrySubject, &privKey.PublicKey)
+
+	keyResolver := &domain.KeyResolver{
+		Registries: domain.BuiltInKeyRegistries(),
+		Clients: map[domain.KeyRegistryType]domain.RegistryClient{
+			domain.KeyRegistryTypeGitHub: fakeReg,
+		},
+	}
+
+	jwksURI := string(issuer) + "/jwks"
+	verifier := attestation.NewVerifier(
+		map[domain.IssuerURL]attestation.TrustedIssuer{
+			issuer: {
+				JWKSURI:  domain.EndpointURL(jwksURI),
+				Audience: "ocm-fleet-enroll",
+				RegistrySubjectMapping: &domain.RegistrySubjectMapping{
+					RegistryID: "github.com",
+					Expression: `claims.preferred_username`,
+				},
+			},
+		},
+		attestation.WithHTTPClient(provider.HTTPClient()),
+		attestation.WithClock(func() time.Time { return time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC) }),
+		attestation.WithKeyResolver(keyResolver),
+	)
+
+	return &testHarness{
+		provider:        provider,
+		privKey:         privKey,
+		signerID:        signerID,
+		issuer:          issuer,
+		identityToken:   identityToken,
+		registrySubject: registrySubject,
+		fakeReg:         fakeReg,
+		verifier:        verifier,
+	}
+}
+
+func (h *testHarness) buildValidAttestation(t *testing.T) *domain.Attestation {
+	t.Helper()
+	manifests := []domain.Manifest{{
+		ManifestType: "kubernetes",
+		Raw:          json.RawMessage(`{"kind":"ConfigMap","apiVersion":"v1","metadata":{"name":"test","namespace":"default"}}`),
+	}}
+	ms := domain.ManifestStrategySpec{
+		Type:      domain.ManifestStrategyInline,
+		Manifests: manifests,
+	}
+	ps := domain.PlacementStrategySpec{
+		Type:    domain.PlacementStrategyStatic,
+		Targets: []domain.TargetID{"t1"},
+	}
+	validUntil := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	gen := domain.Generation(1)
+
+	envelope, err := domain.BuildSignedInputEnvelope("deployments/dep-1", ms, ps, validUntil, nil, gen)
+	if err != nil {
+		t.Fatalf("build envelope: %v", err)
+	}
+	envelopeHash := domain.HashIntent(envelope)
+
+	sigBytes := signEnvelope(t, h.privKey, envelope)
+
+	return &domain.Attestation{
+		Input: domain.SignedInput{
+			Provenance: domain.Provenance{
+				Content: domain.DeploymentContent{
+					Name:              "deployments/dep-1",
+					ManifestStrategy:  ms,
+					PlacementStrategy: ps,
+				},
+				Sig: domain.Signature{
+					Signer:         domain.FederatedIdentity{Subject: h.signerID, Issuer: h.issuer},
+					ContentHash:    envelopeHash,
+					SignatureBytes: sigBytes,
+				},
+				ValidUntil:         validUntil,
+				ExpectedGeneration: gen,
+			},
+			Signer: domain.SignerAssertion{
+				IdentityToken:   domain.RawToken(h.identityToken),
+				RegistryID:      "github.com",
+				RegistrySubject: h.registrySubject,
+			},
+		},
+		Output: &domain.PutManifests{
+			Manifests: manifests,
+		},
+	}
+}
+
+func TestVerifyAttestation_HappyPath(t *testing.T) {
+	h := setupHarness(t)
+	att := h.buildValidAttestation(t)
+
+	err := h.verifier.Verify(context.Background(), att, 1)
+	if err != nil {
+		t.Fatalf("expected verification to pass, got: %v", err)
+	}
+}
+
+func TestVerifyAttestation_BadSignature(t *testing.T) {
+	h := setupHarness(t)
+	att := h.buildValidAttestation(t)
+	att.Input.Provenance.Sig.SignatureBytes = []byte("tampered-sig")
+
+	err := h.verifier.Verify(context.Background(), att, 1)
+	if err == nil {
+		t.Fatal("expected verification to fail with bad signature")
+	}
+}
+
+func TestVerifyAttestation_Expired(t *testing.T) {
+	h := setupHarness(t)
+	att := h.buildValidAttestation(t)
+
+	expiredVerifier := attestation.NewVerifier(
+		h.verifier.TrustedIssuers(),
+		attestation.WithHTTPClient(h.provider.HTTPClient()),
+		attestation.WithClock(func() time.Time { return time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC) }),
+		attestation.WithKeyResolver(&domain.KeyResolver{
+			Registries: domain.BuiltInKeyRegistries(),
+			Clients: map[domain.KeyRegistryType]domain.RegistryClient{
+				domain.KeyRegistryTypeGitHub: h.fakeReg,
+			},
+		}),
+	)
+
+	err := expiredVerifier.Verify(context.Background(), att, 1)
+	if err == nil {
+		t.Fatal("expected verification to fail for expired attestation")
+	}
+}
+
+func TestVerifyAttestation_ExpiredIdentityToken_StillPasses(t *testing.T) {
+	h := setupHarness(t)
+
+	expiredToken := h.provider.IssueToken(t, oidctest.TokenClaims{
+		Subject:  string(h.signerID),
+		Audience: "ocm-fleet-enroll",
+		Expiry:   -time.Hour,
+		Extra:    map[string]any{"preferred_username": h.registrySubject},
+	})
+
+	att := h.buildValidAttestation(t)
+	att.Input.Signer.IdentityToken = domain.RawToken(expiredToken)
+
+	if err := h.verifier.Verify(context.Background(), att, 1); err != nil {
+		t.Fatalf("expected expired identity token to be accepted (only signature matters), got: %v", err)
+	}
+}
+
+func TestVerifyAttestation_WrongAudience_Rejected(t *testing.T) {
+	h := setupHarness(t)
+
+	wrongAudToken := h.provider.IssueToken(t, oidctest.TokenClaims{
+		Subject:  string(h.signerID),
+		Audience: "wrong-audience",
+		Extra:    map[string]any{"preferred_username": h.registrySubject},
+	})
+
+	att := h.buildValidAttestation(t)
+	att.Input.Signer.IdentityToken = domain.RawToken(wrongAudToken)
+
+	err := h.verifier.Verify(context.Background(), att, 1)
+	if err == nil {
+		t.Fatal("expected verification to fail for wrong audience")
+	}
+}
+
+func TestVerifyAttestation_SignerSubjectMismatch(t *testing.T) {
+	h := setupHarness(t)
+	att := h.buildValidAttestation(t)
+	att.Input.Provenance.Sig.Signer.Subject = "wrong-signer"
+
+	err := h.verifier.Verify(context.Background(), att, 1)
+	if err == nil {
+		t.Fatal("expected verification to fail for signer mismatch")
+	}
+}
+
+func TestVerifyAttestation_RegistrySubjectMismatch(t *testing.T) {
+	h := setupHarness(t)
+	att := h.buildValidAttestation(t)
+	att.Input.Signer.RegistrySubject = "wrong-registry-subject"
+
+	err := h.verifier.Verify(context.Background(), att, 1)
+	if err == nil {
+		t.Fatal("expected verification to fail for registry subject mismatch")
+	}
+}
+
+func TestVerifyAttestation_ManifestJSONNormalized(t *testing.T) {
+	h := setupHarness(t)
+	att := h.buildValidAttestation(t)
+
+	// Simulate JSONB normalization: keys reordered alphabetically,
+	// space after colons. The provenance side (signed input) keeps the
+	// original compact form; the output side mirrors what a JSONB
+	// round-trip through manifest_strategies.spec would produce.
+	att.Output = &domain.PutManifests{
+		Manifests: []domain.Manifest{{
+			ManifestType: "kubernetes",
+			Raw:          json.RawMessage(`{"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "test", "namespace": "default"}}`),
+		}},
+	}
+
+	err := h.verifier.Verify(context.Background(), att, 1)
+	if err != nil {
+		t.Fatalf("semantically identical manifest (JSONB-normalized) should pass verification, got: %v", err)
+	}
+}
+
+func TestVerifyAttestation_ManifestContentMismatch(t *testing.T) {
+	h := setupHarness(t)
+	att := h.buildValidAttestation(t)
+	att.Output = &domain.PutManifests{
+		Manifests: []domain.Manifest{{
+			ManifestType: "kubernetes",
+			Raw:          json.RawMessage(`{"tampered":true}`),
+		}},
+	}
+
+	err := h.verifier.Verify(context.Background(), att, 1)
+	if err == nil {
+		t.Fatal("expected verification to fail for manifest mismatch")
+	}
+}
+
+func TestVerifyAttestation_RemoveDeploymentIDMismatch(t *testing.T) {
+	h := setupHarness(t)
+	att := h.buildValidAttestation(t)
+	att.Output = &domain.RemoveByDeploymentName{
+		Name: "deployments/wrong-dep",
+	}
+
+	err := h.verifier.Verify(context.Background(), att, 1)
+	if err == nil {
+		t.Fatal("expected verification to fail for remove deployment ID mismatch")
+	}
+}
+
+func TestVerifyAttestation_RemoveDeploymentIDMatch(t *testing.T) {
+	h := setupHarness(t)
+	att := h.buildValidAttestation(t)
+	att.Output = &domain.RemoveByDeploymentName{
+		Name: "deployments/dep-1",
+	}
+
+	err := h.verifier.Verify(context.Background(), att, 1)
+	if err != nil {
+		t.Fatalf("expected verification to pass for matching remove deployment ID, got: %v", err)
+	}
+}
+
+func TestVerifyAttestation_UntrustedIssuer(t *testing.T) {
+	h := setupHarness(t)
+	att := h.buildValidAttestation(t)
+	att.Input.Provenance.Sig.Signer.Issuer = "https://evil.example.com"
+
+	err := h.verifier.Verify(context.Background(), att, 1)
+	if err == nil {
+		t.Fatal("expected verification to fail for untrusted issuer")
+	}
+}
+
+func TestVerifyAttestation_IdentityTokenSubjectMismatch(t *testing.T) {
+	h := setupHarness(t)
+	att := h.buildValidAttestation(t)
+
+	wrongToken := h.provider.IssueToken(t, oidctest.TokenClaims{
+		Subject:  "wrong-user",
+		Audience: "ocm-fleet-enroll",
+		Extra:    map[string]any{"preferred_username": h.registrySubject},
+	})
+	att.Input.Signer.IdentityToken = domain.RawToken(wrongToken)
+
+	err := h.verifier.Verify(context.Background(), att, 1)
+	if err == nil {
+		t.Fatal("expected verification to fail for identity token subject mismatch")
+	}
+}
+
+func TestVerifyAttestation_ContentHashMismatch(t *testing.T) {
+	h := setupHarness(t)
+	att := h.buildValidAttestation(t)
+	att.Input.Provenance.Sig.ContentHash = []byte("wrong-hash")
+
+	err := h.verifier.Verify(context.Background(), att, 1)
+	if err == nil {
+		t.Fatal("expected verification to fail for content hash mismatch")
+	}
+}
+
+func TestVerifyAttestation_NoKeyResolver(t *testing.T) {
+	provider := oidctest.Start(t, oidctest.WithAudience("ocm-fleet-enroll"))
+	issuer := provider.IssuerURL()
+
+	verifier := attestation.NewVerifier(
+		map[domain.IssuerURL]attestation.TrustedIssuer{
+			issuer: {
+				JWKSURI:  domain.EndpointURL(string(issuer) + "/jwks"),
+				Audience: "ocm-fleet-enroll",
+			},
+		},
+		attestation.WithHTTPClient(provider.HTTPClient()),
+	)
+
+	h := setupHarness(t)
+	att := h.buildValidAttestation(t)
+	att.Input.Provenance.Sig.Signer.Issuer = issuer
+
+	err := verifier.Verify(context.Background(), att, 1)
+	if err == nil {
+		t.Fatal("expected verification to fail without key resolver")
+	}
+}
+
+func TestVerifyAttestation_GenerationMismatch(t *testing.T) {
+	h := setupHarness(t)
+	att := h.buildValidAttestation(t)
+
+	err := h.verifier.Verify(context.Background(), att, 99)
+	if err == nil {
+		t.Fatal("expected verification to fail for generation mismatch")
+	}
+	if !strings.Contains(err.Error(), "generation mismatch") {
+		t.Errorf("error = %q, want it to mention generation mismatch", err)
+	}
+}
+
+func TestVerifyAttestation_GenerationZero_SkipsCheck(t *testing.T) {
+	h := setupHarness(t)
+	att := h.buildValidAttestation(t)
+	att.Input.Provenance.ExpectedGeneration = 0
+
+	// Re-sign with zero generation so the envelope still matches.
+	ms := att.Input.Provenance.Content.(domain.DeploymentContent).ManifestStrategy
+	ps := att.Input.Provenance.Content.(domain.DeploymentContent).PlacementStrategy
+	validUntil := att.Input.Provenance.ValidUntil
+	envelope, err := domain.BuildSignedInputEnvelope("deployments/dep-1", ms, ps, validUntil, nil, 0)
+	if err != nil {
+		t.Fatalf("build envelope: %v", err)
+	}
+	envelopeHash := domain.HashIntent(envelope)
+	att.Input.Provenance.Sig.ContentHash = envelopeHash
+	att.Input.Provenance.Sig.SignatureBytes = signEnvelope(t, h.privKey, envelope)
+
+	// Any delivery generation should be accepted when signed generation is 0.
+	if err := h.verifier.Verify(context.Background(), att, 42); err != nil {
+		t.Fatalf("expected verification to pass when signed generation is zero, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+func signDoc(t *testing.T, privKey *ecdsa.PrivateKey, doc []byte) []byte {
+	t.Helper()
+	hash := sha256.Sum256(doc)
+	sig, err := ecdsa.SignASN1(rand.Reader, privKey, hash[:])
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	return sig
+}
+
+func signEnvelope(t *testing.T, privKey *ecdsa.PrivateKey, envelope []byte) []byte {
+	t.Helper()
+	return signDoc(t, privKey, envelope)
+}

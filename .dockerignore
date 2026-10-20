@@ -1,0 +1,50 @@
+# VCS / tooling / local env
+.git
+.github
+.vscode
+.cursor
+.claude
+.claude_state
+.coderabbit.yaml
+.superpowers
+.task
+.worktrees
+.venv
+.env
+.env.*
+
+# Node / JS artifacts (web builder selectively COPYs what it needs)
+**/node_modules
+client/**/dist
+sdk/**/dist
+extensions/**/dist
+/web
+
+# Repo areas not needed for builds
+bin
+**/bin/
+poc
+docs
+e2e
+# Exclude deploy harnesses from the image build context, but keep
+# deploy/scripts/ (renderer + all-in-one entrypoint for Dockerfile.aio).
+deploy/podman
+deploy/openshift
+proto
+!proto/project.json
+data
+*.md
+Taskfile.yml
+
+# Build / test artifacts (keep compile layers stable when only tests change)
+**/*_test.go
+*.test
+*.out
+coverage.*
+*.db
+*.db-shm
+*.db-wal
+
+# Server docs / test helpers not linked into the binary
+server/docs
+server/testserver

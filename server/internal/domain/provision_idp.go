@@ -1,0 +1,147 @@
+package domain
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+)
+
+// ProvisionIdPInput is the specification for provisioning a new
+// identity provider. The workflow resolves OIDC discovery, persists
+// the auth method, and creates a trust-bundle deployment.
+type ProvisionIdPInput struct {
+	AuthMethodID AuthMethodID
+	AuthMethod   AuthMethod
+}
+
+// ProvisionIdPEventSink receives events emitted while provisioning an
+// identity provider.
+type ProvisionIdPEventSink interface {
+	AuthMethodCreated(method AuthMethod)
+	AuthMethodFailed(err error)
+}
+
+// ProvisionIdPWorkflowSpec is a durable workflow that atomically
+// persists an auth method and starts a trust-bundle deployment to
+// distribute the IdP's trust configuration to delivery agents.
+//
+// Pass this spec to [Registry.RegisterProvisionIdP] to obtain a
+// [ProvisionIdPWorkflow] that can start instances.
+type ProvisionIdPWorkflowSpec struct {
+	AuthMethods          AuthMethodRepository
+	Discovery            OIDCDiscoveryClient
+	CreateDeployment     CreateDeploymentWorkflow
+	TrustBundlePlacement PlacementStrategySpec
+	EventSink            ProvisionIdPEventSink
+	Now                  func() time.Time
+}
+
+func (s *ProvisionIdPWorkflowSpec) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+// Name returns the stable workflow name for registry registration.
+func (s *ProvisionIdPWorkflowSpec) Name() string { return "provision-idp" }
+
+// ResolveAndPersist returns an activity that runs OIDC discovery and
+// saves the auth method. This is idempotent: repeated execution
+// overwrites the same auth method ID.
+func (s *ProvisionIdPWorkflowSpec) ResolveAndPersist() Activity[ProvisionIdPInput, AuthMethod] {
+	return NewActivity("resolve-and-persist-auth-method", func(ctx context.Context, in ProvisionIdPInput) (AuthMethod, error) {
+		method := NewOIDCAuthMethod(in.AuthMethodID, in.AuthMethod.OIDC())
+
+		if err := method.Validate(); err != nil {
+			return AuthMethod{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+		}
+
+		switch method.Type() {
+		case AuthMethodTypeOIDC:
+			if method.OIDC() == nil || method.OIDC().IssuerURL == "" {
+				return AuthMethod{}, fmt.Errorf("%w: issuer_url is required", ErrInvalidArgument)
+			}
+			meta, err := s.Discovery.FetchMetadata(ctx, method.OIDC().IssuerURL)
+			if err != nil {
+				return AuthMethod{}, fmt.Errorf("fetch OIDC discovery: %w", err)
+			}
+			updated := *method.OIDC()
+			updated.JWKSURI = meta.JWKSURI
+			updated.AuthorizationEndpoint = meta.AuthorizationEndpoint
+			updated.TokenEndpoint = meta.TokenEndpoint
+			method.oidcConfig = &updated
+		}
+
+		if err := s.AuthMethods.Save(ctx, method); err != nil {
+			return AuthMethod{}, fmt.Errorf("save auth method: %w", err)
+		}
+		if s.EventSink != nil {
+			s.EventSink.AuthMethodCreated(method)
+		}
+		return method, nil
+	})
+}
+
+// DeployTrustBundle returns an activity that creates a deployment
+// carrying the IdP's trust configuration as an idp-trust-bundle
+// manifest. The deployment is fire-and-forget: orchestration handles
+// delivery independently.
+func (s *ProvisionIdPWorkflowSpec) DeployTrustBundle() Activity[AuthMethod, struct{}] {
+	return NewActivity("deploy-trust-bundle", func(ctx context.Context, method AuthMethod) (struct{}, error) {
+		if method.Type() != AuthMethodTypeOIDC || method.OIDC() == nil {
+			return struct{}{}, nil
+		}
+		if s.TrustBundlePlacement.Type == "" {
+			return struct{}{}, nil
+		}
+
+		entry := TrustBundleEntry{
+			IssuerURL:                method.OIDC().IssuerURL,
+			JWKSURI:                  method.OIDC().JWKSURI,
+			EnrollmentAudience:       method.OIDC().KeyEnrollmentAudience,
+			PublicKeyClaimExpression: method.OIDC().PublicKeyClaimExpression,
+			RegistrySubjectMapping:   method.OIDC().RegistrySubjectMapping,
+		}
+
+		raw, err := json.Marshal(entry)
+		if err != nil {
+			return struct{}{}, fmt.Errorf("marshal trust bundle entry: %w", err)
+		}
+
+		input := CreateDeploymentInput{
+			Name: ResourceName("deployments/idp-trust-" + string(method.ID())),
+			ManifestStrategy: ManifestStrategySpec{
+				Type: ManifestStrategyInline,
+				Manifests: []Manifest{{
+					ManifestType: TrustBundleManifestType,
+					Raw:          raw,
+				}},
+			},
+			PlacementStrategy: s.TrustBundlePlacement,
+		}
+
+		_, err = s.CreateDeployment.Start(ctx, input)
+		return struct{}{}, err
+	})
+}
+
+// Run is the workflow body: resolve and persist the auth method, then
+// deploy the trust bundle.
+func (s *ProvisionIdPWorkflowSpec) Run(record Record, input ProvisionIdPInput) (AuthMethod, error) {
+	method, err := RunActivity(record, s.ResolveAndPersist(), input)
+	if err != nil {
+		err = fmt.Errorf("resolve and persist auth method: %w", err)
+		if s.EventSink != nil {
+			s.EventSink.AuthMethodFailed(err)
+		}
+		return AuthMethod{}, err
+	}
+
+	if _, err := RunActivity(record, s.DeployTrustBundle(), method); err != nil {
+		return AuthMethod{}, fmt.Errorf("deploy trust bundle: %w", err)
+	}
+
+	return method, nil
+}

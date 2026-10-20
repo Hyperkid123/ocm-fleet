@@ -1,0 +1,82 @@
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Code coverage profiles and other test artifacts
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env file
+.env
+e2e/.env
+
+# Taskfile checksum cache and deployment state
+.task/
+deploy/podman/.active-deploy
+deploy/openshift/config.env
+deploy/openshift/secrets.env
+
+# Editor/IDE
+# .idea/
+# .vscode/
+.vscode/.debug-tmpdir
+*.code-workspace
+
+# Build artifacts
+**/bin/
+
+*.db
+*.db-shm
+*.db-wal
+data/
+
+*.pyc
+**/__pycache__/
+**/.venv/
+
+# Local test certs
+*.pem
+*.crt
+*.key
+
+.claude_state
+keycloak/certs/
+.worktrees/
+
+# Local podman certificates
+deploy/podman/.certs/
+
+# Nx
+.nx/
+
+# Claude Code
+.claude/worktrees
+.claude/settings.local.json
+
+# JS / UI build artifacts
+node_modules/
+**/dist/
+/web/
+.cache
+test-results/
+playwright-report/
+.mf/
+sdk/common/src/generated/pf-icons.json

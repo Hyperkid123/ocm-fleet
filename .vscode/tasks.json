@@ -1,0 +1,16 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "make-debug-tmpdir",
+      "type": "shell",
+      "command": "debug_tmp_dir=$(mktemp -d) && rm -f .vscode/.debug-tmpdir && ln -s \"$debug_tmp_dir\" .vscode/.debug-tmpdir",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "silent"
+      }
+    }
+  ]
+}

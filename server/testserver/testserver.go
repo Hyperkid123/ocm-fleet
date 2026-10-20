@@ -1,0 +1,129 @@
+// Package testserver provides a fully wired in-process resource manager gRPC
+// server for integration testing. The server uses SQLite in-memory storage
+// and the in-memory workflow engine, making tests fast and deterministic.
+package testserver
+
+import (
+	"context"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	kindaddon "github.com/stolostron/ocm-fleet/server/internal/addon/kind"
+	"github.com/stolostron/ocm-fleet/server/internal/application"
+	"github.com/stolostron/ocm-fleet/server/internal/bootstrap"
+	"github.com/stolostron/ocm-fleet/server/internal/domain"
+)
+
+// stubVerifier returns a fixed test identity for any token.
+type stubVerifier struct{}
+
+// Verify implements domain.OIDCTokenVerifier with a fixed test subject.
+func (stubVerifier) Verify(_ context.Context, _ domain.OIDCConfig, _ string) (domain.SubjectClaims, error) {
+	return domain.SubjectClaims{
+		FederatedIdentity: domain.FederatedIdentity{
+			Subject: "test-user",
+			Issuer:  "test-issuer",
+		},
+	}, nil
+}
+
+// RegisterJWKS implements bootstrap.JWKSRegistrar as a no-op.
+func (stubVerifier) RegisterJWKS(context.Context, domain.EndpointURL) error { return nil }
+
+// stubDiscovery returns fixed test metadata.
+type stubDiscovery struct{}
+
+// FetchMetadata implements domain.OIDCDiscoveryClient with endpoints derived
+// from the requested issuer URL.
+func (stubDiscovery) FetchMetadata(_ context.Context, issuerURL domain.IssuerURL) (domain.OIDCMetadata, error) {
+	return domain.OIDCMetadata{
+		Issuer:                issuerURL,
+		AuthorizationEndpoint: domain.EndpointURL(string(issuerURL) + "/authorize"),
+		TokenEndpoint:         domain.EndpointURL(string(issuerURL) + "/token"),
+		JWKSURI:               domain.EndpointURL(string(issuerURL) + "/jwks"),
+	}, nil
+}
+
+// Start launches an in-process resource manager server via bootstrap and returns
+// its gRPC dial address. The server is stopped when the test finishes.
+func Start(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "resource-manager.db")
+	// TODO: shared-cache in-memory SQLite once bootstrap keeps an OpenMemory
+	// sentinel. See docs/ocm-fleet/e2e-testing/2026-09-03-testserver-in-memory-sqlite.md.
+
+	cfg, err := bootstrap.NewConfig(bootstrap.ConfigInput{
+		GRPCAddr:             "127.0.0.1:0",
+		HTTPAddr:             "127.0.0.1:0",
+		DBPath:               dbPath,
+		OIDCIssuer:           "https://test-issuer.example",
+		OIDCResourceAudience: "resource-manager",
+		// Kind drives trust-bundle placement for provision-IdP.
+		Addons: "kind",
+	})
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	srv, err := bootstrap.Start(ctx, cfg, logger,
+		bootstrap.WithWorkflowRegistry(bootstrap.NewMemWorkflowRegistry()),
+		bootstrap.WithOIDCDeps(bootstrap.OIDCDeps{
+			Discovery: stubDiscovery{},
+			Verifier:  stubVerifier{},
+		}),
+		bootstrap.WithAddonAssembly(testAddonAssembly),
+	)
+	if err != nil {
+		t.Fatalf("bootstrap.Start: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := srv.Close(closeCtx); err != nil {
+			t.Errorf("bootstrap.Close: %v", err)
+		}
+	})
+
+	return srv.Endpoints().GRPC.Dial
+}
+
+// testAddonAssembly preserves focused Kind create/read semantics
+// for sibling CLI tests.
+//
+// Kind omits DeliveryCapability so Connect.Agent may be nil: schemas/targets
+// stay live, resources remain CREATING, and delete does not wait on delivery.
+func testAddonAssembly(_ context.Context, _ bootstrap.AddonDeps) ([]bootstrap.AddonSpec, error) {
+	kindDesc := kindaddon.Descriptor()
+	kindDesc.Capabilities = []domain.Capability{
+		domain.ManagedResourceCapability{ResourceType: kindaddon.ClusterResourceType},
+		domain.InventoryResourceCapability{ResourceType: kindaddon.ClusterResourceType},
+		domain.InventoryResourceCapability{ResourceType: kindaddon.NodeResourceType},
+	}
+
+	return []bootstrap.AddonSpec{
+		{
+			Descriptor: kindDesc,
+			Connect: application.ConnectInput{
+				Targets: []domain.TargetInfo{domain.TargetInfoFromSnapshot(domain.TargetInfoSnapshot{
+					ID:   "kind-local",
+					Type: kindaddon.TargetType,
+					Name: "Local Kind Provider",
+					AcceptedManifestTypes: []domain.ManifestType{
+						kindaddon.ClusterManifestType,
+						kindaddon.ManagedClusterManifestType,
+					},
+				})},
+				Schemas: []domain.ExtensionResourceSchema{kindaddon.Schema(), kindaddon.NodeSchema()},
+			},
+		},
+	}, nil
+}

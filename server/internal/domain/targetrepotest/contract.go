@@ -1,0 +1,232 @@
+// Package targetrepotest provides contract tests for [domain.TargetRepository]
+// implementations.
+package targetrepotest
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/stolostron/ocm-fleet/server/internal/domain"
+)
+
+// Factory creates a fresh [domain.TargetRepository] for each test invocation.
+type Factory func(t *testing.T) domain.TargetRepository
+
+// Run exercises the [domain.TargetRepository] contract.
+func Run(t *testing.T, factory Factory) {
+	t.Run("CreateAndGet", func(t *testing.T) {
+		repo := factory(t)
+		ctx := context.Background()
+		target := domain.TargetInfoFromSnapshot(domain.TargetInfoSnapshot{
+			ID:         "t1",
+			Type:       "kubernetes",
+			Name:       "cluster-a",
+			State:      domain.TargetStateInitializing,
+			Labels:     map[string]string{"env": "prod"},
+			Properties: map[string]string{"region": "us-east"},
+		})
+
+		if err := repo.Create(ctx, target); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+
+		got, err := repo.Get(ctx, "t1")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.Type() != "kubernetes" {
+			t.Errorf("Type = %q, want %q", got.Type(), "kubernetes")
+		}
+		if got.Name() != "cluster-a" {
+			t.Errorf("Name = %q, want %q", got.Name(), "cluster-a")
+		}
+		if got.State() != domain.TargetStateInitializing {
+			t.Errorf("State = %q, want %q", got.State(), domain.TargetStateInitializing)
+		}
+		if got.Labels()["env"] != "prod" {
+			t.Errorf("Labels[env] = %q, want %q", got.Labels()["env"], "prod")
+		}
+		if got.Properties()["region"] != "us-east" {
+			t.Errorf("Properties[region] = %q, want %q", got.Properties()["region"], "us-east")
+		}
+	})
+
+	t.Run("CreateDefaultsToReady", func(t *testing.T) {
+		repo := factory(t)
+		ctx := context.Background()
+		target := domain.TargetInfoFromSnapshot(domain.TargetInfoSnapshot{ID: "t1", Name: "cluster-a"})
+
+		if err := repo.Create(ctx, target); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		got, err := repo.Get(ctx, "t1")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.State() != domain.TargetStateReady {
+			t.Errorf("State = %q, want %q (default)", got.State(), domain.TargetStateReady)
+		}
+	})
+
+	t.Run("CreateAndGet_WithAcceptedResourceTypes", func(t *testing.T) {
+		repo := factory(t)
+		ctx := context.Background()
+		target := domain.TargetInfoFromSnapshot(domain.TargetInfoSnapshot{
+			ID:                    "t1",
+			Type:                  "kubernetes",
+			Name:                  "cluster-a",
+			Labels:                map[string]string{"env": "prod"},
+			Properties:            map[string]string{"region": "us-east"},
+			AcceptedManifestTypes: []domain.ManifestType{"kubernetes.manifest", "helm.chart"},
+		})
+
+		if err := repo.Create(ctx, target); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+
+		got, err := repo.Get(ctx, "t1")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if len(got.AcceptedManifestTypes()) != 2 {
+			t.Fatalf("AcceptedManifestTypes len = %d, want 2", len(got.AcceptedManifestTypes()))
+		}
+		types := map[domain.ManifestType]bool{}
+		for _, mt := range got.AcceptedManifestTypes() {
+			types[mt] = true
+		}
+		if !types["kubernetes.manifest"] || !types["helm.chart"] {
+			t.Errorf("AcceptedManifestTypes = %v, want [kubernetes.manifest helm.chart]", got.AcceptedManifestTypes())
+		}
+	})
+
+	t.Run("CreateOrUpdate_Insert", func(t *testing.T) {
+		repo := factory(t)
+		ctx := context.Background()
+		target := domain.TargetInfoFromSnapshot(domain.TargetInfoSnapshot{
+			ID:         "t1",
+			Type:       "kubernetes",
+			Name:       "cluster-a",
+			Labels:     map[string]string{"env": "prod"},
+			Properties: map[string]string{"region": "us-east"},
+		})
+
+		if err := repo.CreateOrUpdate(ctx, target); err != nil {
+			t.Fatalf("CreateOrUpdate (insert): %v", err)
+		}
+
+		got, err := repo.Get(ctx, "t1")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.Name() != "cluster-a" {
+			t.Errorf("Name = %q, want %q", got.Name(), "cluster-a")
+		}
+	})
+
+	t.Run("CreateOrUpdate_Update", func(t *testing.T) {
+		repo := factory(t)
+		ctx := context.Background()
+		target := domain.TargetInfoFromSnapshot(domain.TargetInfoSnapshot{
+			ID:   "t1",
+			Type: "kubernetes",
+			Name: "cluster-a",
+		})
+		if err := repo.Create(ctx, target); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+
+		target = domain.TargetInfoFromSnapshot(domain.TargetInfoSnapshot{
+			ID:         target.ID(),
+			Type:       target.Type(),
+			Name:       "cluster-a-updated",
+			State:      target.State(),
+			Labels:     target.Labels(),
+			Properties: map[string]string{"region": "eu-west"},
+		})
+		if err := repo.CreateOrUpdate(ctx, target); err != nil {
+			t.Fatalf("CreateOrUpdate (update): %v", err)
+		}
+
+		got, err := repo.Get(ctx, "t1")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.Name() != "cluster-a-updated" {
+			t.Errorf("Name = %q, want %q", got.Name(), "cluster-a-updated")
+		}
+		if got.Properties()["region"] != "eu-west" {
+			t.Errorf("Properties[region] = %q, want %q", got.Properties()["region"], "eu-west")
+		}
+	})
+
+	t.Run("CreateDuplicate", func(t *testing.T) {
+		repo := factory(t)
+		ctx := context.Background()
+		target := domain.TargetInfoFromSnapshot(domain.TargetInfoSnapshot{ID: "t1", Name: "cluster-a"})
+
+		if err := repo.Create(ctx, target); err != nil {
+			t.Fatalf("first Create: %v", err)
+		}
+		err := repo.Create(ctx, target)
+		if !errors.Is(err, domain.ErrAlreadyExists) {
+			t.Fatalf("second Create: got %v, want ErrAlreadyExists", err)
+		}
+	})
+
+	t.Run("GetNotFound", func(t *testing.T) {
+		repo := factory(t)
+		_, err := repo.Get(context.Background(), "nonexistent")
+		if !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("Get: got %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("List", func(t *testing.T) {
+		repo := factory(t)
+		ctx := context.Background()
+
+		targets := []domain.TargetInfo{
+			domain.TargetInfoFromSnapshot(domain.TargetInfoSnapshot{ID: "t1", Name: "a"}),
+			domain.TargetInfoFromSnapshot(domain.TargetInfoSnapshot{ID: "t2", Name: "b"}),
+		}
+		for _, tgt := range targets {
+			if err := repo.Create(ctx, tgt); err != nil {
+				t.Fatalf("Create %s: %v", tgt.ID(), err)
+			}
+		}
+
+		got, err := repo.List(ctx)
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("List: got %d, want 2", len(got))
+		}
+	})
+
+	t.Run("Delete", func(t *testing.T) {
+		repo := factory(t)
+		ctx := context.Background()
+
+		if err := repo.Create(ctx, domain.TargetInfoFromSnapshot(domain.TargetInfoSnapshot{ID: "t1", Name: "a"})); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.Delete(ctx, "t1"); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		_, err := repo.Get(ctx, "t1")
+		if !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("Get after Delete: got %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("DeleteNotFound", func(t *testing.T) {
+		repo := factory(t)
+		err := repo.Delete(context.Background(), "nonexistent")
+		if !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("Delete: got %v, want ErrNotFound", err)
+		}
+	})
+}

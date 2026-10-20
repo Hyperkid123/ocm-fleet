@@ -1,0 +1,128 @@
+package grpc
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	pb "github.com/stolostron/ocm-fleet/server/gen/ocm/v1alpha"
+	"github.com/stolostron/ocm-fleet/server/internal/application"
+	"github.com/stolostron/ocm-fleet/server/internal/domain"
+)
+
+const authMethodCollection = "authMethods/"
+
+// AuthMethodServer implements [pb.AuthMethodServiceServer].
+type AuthMethodServer struct {
+	pb.UnimplementedAuthMethodServiceServer
+	AuthMethods *application.AuthMethodService
+	Authn       *AuthnInterceptor
+}
+
+func (s *AuthMethodServer) CreateAuthMethod(ctx context.Context, req *pb.CreateAuthMethodRequest) (*pb.AuthMethod, error) {
+	if req.GetAuthMethodId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "auth_method_id is required")
+	}
+	if req.GetAuthMethod() == nil {
+		return nil, status.Error(codes.InvalidArgument, "auth_method is required")
+	}
+
+	method, err := authMethodFromProto(req.GetAuthMethod())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid auth_method: %v", err)
+	}
+
+	result, err := s.AuthMethods.Create(ctx, domain.AuthMethodID(req.GetAuthMethodId()), method)
+	if err != nil {
+		return nil, domainError(err)
+	}
+
+	if s.Authn != nil {
+		s.Authn.InvalidateMethodCache()
+	}
+
+	return authMethodToProto(result), nil
+}
+
+func (s *AuthMethodServer) GetAuthMethod(ctx context.Context, req *pb.GetAuthMethodRequest) (*pb.AuthMethod, error) {
+	id, err := parseAuthMethodName(req.GetName())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid name: %v", err)
+	}
+
+	method, err := s.AuthMethods.Get(ctx, id)
+	if err != nil {
+		return nil, domainError(err)
+	}
+
+	return authMethodToProto(method), nil
+}
+
+func authMethodName(id domain.AuthMethodID) string {
+	return authMethodCollection + string(id)
+}
+
+func parseAuthMethodName(name string) (domain.AuthMethodID, error) {
+	id, ok := strings.CutPrefix(name, authMethodCollection)
+	if !ok || id == "" {
+		return "", fmt.Errorf("name must have format %s{id}", authMethodCollection)
+	}
+	return domain.AuthMethodID(id), nil
+}
+
+func authMethodFromProto(p *pb.AuthMethod) (domain.AuthMethod, error) {
+	switch p.GetType() {
+	case pb.AuthMethod_TYPE_OIDC:
+		oc := p.GetOidcConfig()
+		if oc == nil {
+			return domain.AuthMethod{}, fmt.Errorf("oidc_config is required when type is TYPE_OIDC")
+		}
+		oidc := &domain.OIDCConfig{
+			IssuerURL:                domain.IssuerURL(oc.GetIssuerUrl()),
+			Audience:                 domain.Audience(oc.GetAudience()),
+			KeyEnrollmentAudience:    domain.Audience(oc.GetKeyEnrollmentAudience()),
+			PublicKeyClaimExpression: oc.GetPublicKeyClaimExpression(),
+		}
+		if rsm := oc.GetRegistrySubjectMapping(); rsm != nil {
+			oidc.RegistrySubjectMapping = &domain.RegistrySubjectMapping{
+				RegistryID: domain.KeyRegistryID(rsm.GetRegistryId()),
+				Expression: rsm.GetExpression(),
+			}
+		}
+		return domain.NewOIDCAuthMethod("", oidc), nil
+	default:
+		return domain.AuthMethod{}, fmt.Errorf("unsupported auth method type: %v", p.GetType())
+	}
+}
+
+func authMethodToProto(m domain.AuthMethod) *pb.AuthMethod {
+	out := &pb.AuthMethod{
+		Name: authMethodName(m.ID()),
+	}
+	switch m.Type() {
+	case domain.AuthMethodTypeOIDC:
+		out.Type = pb.AuthMethod_TYPE_OIDC
+		if oidc := m.OIDC(); oidc != nil {
+			oc := &pb.OIDCConfig{
+				IssuerUrl:                string(oidc.IssuerURL),
+				Audience:                 string(oidc.Audience),
+				AuthorizationEndpoint:    string(oidc.AuthorizationEndpoint),
+				TokenEndpoint:            string(oidc.TokenEndpoint),
+				JwksUri:                  string(oidc.JWKSURI),
+				KeyEnrollmentAudience:    string(oidc.KeyEnrollmentAudience),
+				PublicKeyClaimExpression: oidc.PublicKeyClaimExpression,
+			}
+			if rsm := oidc.RegistrySubjectMapping; rsm != nil {
+				oc.RegistrySubjectMapping = &pb.RegistrySubjectMapping{
+					RegistryId: string(rsm.RegistryID),
+					Expression: rsm.Expression,
+				}
+			}
+			out.OidcConfig = oc
+		}
+	}
+	return out
+}

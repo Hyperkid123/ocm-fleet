@@ -1,0 +1,205 @@
+package application_test
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stolostron/ocm-fleet/server/internal/application"
+	"github.com/stolostron/ocm-fleet/server/internal/attestation"
+	"github.com/stolostron/ocm-fleet/server/internal/domain"
+	"github.com/stolostron/ocm-fleet/server/internal/infrastructure/keyregistry"
+	"github.com/stolostron/ocm-fleet/server/internal/infrastructure/oidc/oidctest"
+	"github.com/stolostron/ocm-fleet/server/internal/infrastructure/sqlite"
+)
+
+// TestEndToEnd_CreateDeployment_AssemblesAndVerifiesAttestation exercises
+// the full attestation lifecycle with the registry-backed key model:
+//  1. Enroll a signer (ECDSA key in fake registry + SignerEnrollment)
+//  2. Create a deployment with a user signature → provenance attached
+//  3. Orchestration assembles an Attestation and passes it to the delivery agent
+//  4. The delivery agent's attestation is verified end-to-end (key resolved from registry)
+func TestEndToEnd_CreateDeployment_AssemblesAndVerifiesAttestation(t *testing.T) {
+	provider := oidctest.Start(t, oidctest.WithAudience("ocm-fleet-enroll"))
+	signerID := domain.SubjectID("e2e-user")
+	issuer := provider.IssuerURL()
+
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	registrySubject := domain.RegistrySubject("gh-" + string(signerID))
+
+	identityToken := provider.IssueToken(t, oidctest.TokenClaims{
+		Subject:  string(signerID),
+		Audience: "ocm-fleet-enroll",
+		Extra:    map[string]any{"preferred_username": registrySubject},
+	})
+
+	store := newStore(t)
+	inner := &sqlite.RecordingDeliveryService{
+		Store: store,
+		Now:   func() time.Time { return time.Date(2026, 3, 11, 12, 0, 0, 0, time.UTC) },
+	}
+	agent := &capturingDeliveryAgent{inner: inner}
+	h := setupWithStoreAndAgent(t, store, agent)
+	inner.Reporter = h.reporter
+
+	h.fakeReg.Register("https://api.github.com", registrySubject, &privKey.PublicKey)
+
+	registerTargets(t, h, "t1")
+
+	enrollSignerDirect(t, store, domain.SignerEnrollmentFromSnapshot(domain.SignerEnrollmentSnapshot{
+		ID:                "se-e2e",
+		FederatedIdentity: domain.FederatedIdentity{Subject: signerID, Issuer: issuer},
+		IdentityToken:     domain.RawToken(identityToken),
+		RegistrySubject:   registrySubject,
+		RegistryID:        "github.com",
+		CreatedAt:         time.Now().UTC(),
+		ExpiresAt:         time.Now().Add(365 * 24 * time.Hour).UTC(),
+	}))
+
+	ms := defaultManifestStrategy()
+	ps := defaultPlacementStrategy()
+	validUntil := time.Now().Add(24 * time.Hour)
+
+	sig := signEnvelope(t, privKey, "deployments/e2e-dep", ms, ps, validUntil, 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ctx = application.ContextWithAuth(ctx, &application.AuthorizationContext{
+		Subject: &domain.SubjectClaims{FederatedIdentity: domain.FederatedIdentity{Subject: signerID, Issuer: issuer}},
+		Token:   "access-token",
+	})
+
+	dep, err := h.deployments.Create(ctx, domain.CreateDeploymentInput{
+		Name:              "deployments/e2e-dep",
+		ManifestStrategy:  ms,
+		PlacementStrategy: ps,
+		UserSignature:     sig,
+		ValidUntil:        validUntil,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if dep.Fulfillment.Provenance() == nil {
+		t.Fatal("expected Provenance on fulfillment")
+	}
+
+	awaitDeploymentState(ctx, t, store, "deployments/e2e-dep", domain.FulfillmentStateActive)
+
+	att := agent.capturedAttestation()
+	if att == nil {
+		t.Fatal("delivery agent received nil Attestation; expected assembled attestation")
+	}
+
+	if att.Input.Provenance.Content.ContentID() != "deployments/e2e-dep" {
+		t.Errorf("Attestation.Input.Provenance.Content.ContentID() = %q, want %q",
+			att.Input.Provenance.Content.ContentID(), "deployments/e2e-dep")
+	}
+	if att.Input.Signer.RegistrySubject != registrySubject {
+		t.Errorf("Attestation.Input.Signer.RegistrySubject = %q, want %q",
+			att.Input.Signer.RegistrySubject, registrySubject)
+	}
+	if att.Input.Signer.RegistryID != "github.com" {
+		t.Errorf("Attestation.Input.Signer.RegistryID = %q, want %q",
+			att.Input.Signer.RegistryID, "github.com")
+	}
+	put, ok := att.Output.(*domain.PutManifests)
+	if !ok {
+		t.Fatalf("Attestation.Output is %T, want *PutManifests", att.Output)
+	}
+	if len(put.Manifests) == 0 {
+		t.Fatal("PutManifests.Manifests is empty")
+	}
+
+	// Build a verifier with the same fake registry for key resolution.
+	fakeVerifierReg := keyregistry.NewFake()
+	fakeVerifierReg.Register("https://api.github.com", registrySubject, &privKey.PublicKey)
+	verifierKeyResolver := &domain.KeyResolver{
+		Registries: domain.BuiltInKeyRegistries(),
+		Clients: map[domain.KeyRegistryType]domain.RegistryClient{
+			domain.KeyRegistryTypeGitHub: fakeVerifierReg,
+		},
+	}
+
+	celExpr := `claims.preferred_username`
+	jwksURI := string(issuer) + "/jwks"
+	verifier := attestation.NewVerifier(
+		map[domain.IssuerURL]attestation.TrustedIssuer{
+			issuer: {
+				JWKSURI:  domain.EndpointURL(jwksURI),
+				Audience: "ocm-fleet-enroll",
+				RegistrySubjectMapping: &domain.RegistrySubjectMapping{
+					RegistryID: "github.com",
+					Expression: celExpr,
+				},
+			},
+		},
+		attestation.WithHTTPClient(provider.HTTPClient()),
+		attestation.WithKeyResolver(verifierKeyResolver),
+	)
+
+	if err := verifier.Verify(ctx, att, 1); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+
+	if gen := agent.capturedGeneration(); gen != 1 {
+		t.Errorf("Generation = %d, want 1", gen)
+	}
+}
+
+// capturingDeliveryAgent wraps another [domain.DeliveryAgent] and records
+// the last [domain.Attestation] passed to Deliver.
+type capturingDeliveryAgent struct {
+	inner      domain.DeliveryAgent
+	mu         sync.Mutex
+	att        *domain.Attestation
+	generation domain.Generation
+}
+
+func (a *capturingDeliveryAgent) Deliver(ctx context.Context, target domain.TargetInfo, id domain.DeliveryID, manifests []domain.Manifest, auth domain.DeliveryAuth, att *domain.Attestation, generation domain.Generation) error {
+	a.mu.Lock()
+	a.att = att
+	a.generation = generation
+	a.mu.Unlock()
+	return a.inner.Deliver(ctx, target, id, manifests, auth, att, generation)
+}
+
+func (a *capturingDeliveryAgent) Remove(ctx context.Context, target domain.TargetInfo, id domain.DeliveryID, manifests []domain.Manifest, auth domain.DeliveryAuth, att *domain.Attestation, generation domain.Generation) error {
+	return a.inner.Remove(ctx, target, id, manifests, auth, att, generation)
+}
+
+func (a *capturingDeliveryAgent) capturedAttestation() *domain.Attestation {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.att
+}
+
+func (a *capturingDeliveryAgent) capturedGeneration() domain.Generation {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.generation
+}
+
+func enrollSignerDirect(t *testing.T, store domain.Store, enrollment domain.SignerEnrollment) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := store.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer tx.Rollback()
+	if err := tx.SignerEnrollments().Create(ctx, enrollment); err != nil {
+		t.Fatalf("create signer enrollment: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+}

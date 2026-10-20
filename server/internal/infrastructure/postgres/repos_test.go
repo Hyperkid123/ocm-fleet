@@ -1,0 +1,117 @@
+package postgres_test
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stolostron/ocm-fleet/server/internal/domain"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/authmethodrepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/deliveryrepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/deploymentrepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/extensionresourcerepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/fulfillmentrepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/inventoryrepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/resourceidentityrepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/storetest"
+	"github.com/stolostron/ocm-fleet/server/internal/domain/targetrepotest"
+	"github.com/stolostron/ocm-fleet/server/internal/infrastructure/postgres"
+)
+
+func newStore(t *testing.T) *postgres.Store {
+	t.Helper()
+	db := postgres.OpenTestDB(t)
+	return &postgres.Store{DB: db}
+}
+
+func newTxRepo[T any](t *testing.T, accessor func(domain.Tx) T) T {
+	t.Helper()
+	store := newStore(t)
+	tx, err := store.Begin(context.Background())
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	t.Cleanup(func() { tx.Rollback() })
+	return accessor(tx)
+}
+
+func TestTargetRepo(t *testing.T) {
+	t.Parallel()
+	targetrepotest.Run(t, func(t *testing.T) domain.TargetRepository {
+		return newTxRepo(t, domain.Tx.Targets)
+	})
+}
+
+func TestFulfillmentRepo(t *testing.T) {
+	t.Parallel()
+	fulfillmentrepotest.Run(t, func(t *testing.T) domain.FulfillmentRepository {
+		return newTxRepo(t, domain.Tx.Fulfillments)
+	})
+}
+
+func TestDeploymentRepo(t *testing.T) {
+	t.Parallel()
+	deploymentrepotest.Run(t, func(t *testing.T) domain.Tx {
+		store := newStore(t)
+		tx, err := store.Begin(context.Background())
+		if err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+		t.Cleanup(func() { _ = tx.Rollback() })
+		return tx
+	})
+}
+
+func TestDeliveryRepo(t *testing.T) {
+	t.Parallel()
+	deliveryrepotest.Run(t, func(t *testing.T) domain.DeliveryRepository {
+		return newTxRepo(t, domain.Tx.Deliveries)
+	})
+}
+
+func TestInventoryRepo(t *testing.T) {
+	t.Parallel()
+	inventoryrepotest.Run(t, func(t *testing.T) domain.InventoryRepository {
+		return newTxRepo(t, domain.Tx.Inventory)
+	})
+}
+
+func TestStore(t *testing.T) {
+	t.Parallel()
+	storetest.Run(t, func(t *testing.T) domain.Store {
+		return newStore(t)
+	})
+}
+
+func TestResourceIdentityRepo(t *testing.T) {
+	t.Parallel()
+	resourceidentityrepotest.Run(t, func(t *testing.T) domain.Tx {
+		store := newStore(t)
+		tx, err := store.Begin(context.Background())
+		if err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+		t.Cleanup(func() { _ = tx.Rollback() })
+		return tx
+	})
+}
+
+func TestExtensionResourceRepo(t *testing.T) {
+	t.Parallel()
+	extensionresourcerepotest.Run(t, func(t *testing.T) domain.Tx {
+		store := newStore(t)
+		tx, err := store.Begin(context.Background())
+		if err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+		t.Cleanup(func() { _ = tx.Rollback() })
+		return tx
+	})
+}
+
+func TestAuthMethodRepo(t *testing.T) {
+	t.Parallel()
+	authmethodrepotest.Run(t, func(t *testing.T) domain.AuthMethodRepository {
+		db := postgres.OpenTestDB(t)
+		return &postgres.AuthMethodRepo{DB: db}
+	})
+}
