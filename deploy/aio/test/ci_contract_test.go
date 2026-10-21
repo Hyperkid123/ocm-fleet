@@ -9,7 +9,8 @@
 //     then matching from:/inputs.*.as in openshift/release.
 //   - TestOpenShiftReleaseAIOImageGraphContract: HTTP GET of
 //     openshift/release master. Inspect the GET URL in the failure (network,
-//     404, or openshift/release drift).
+//     404, or openshift/release drift). Temporarily skipped pending the
+//     OCM Fleet CI migration.
 //
 // YAML structs are a trimmed subset of the remote schema; unknown fields
 // are dropped, so a renamed remote field looks like a missing image/job.
@@ -85,6 +86,8 @@ func TestDockerfileResourceManagerOpenShiftRewriteContract(t *testing.T) {
 //
 // A failure is a GET error (network, 404) or openshift/release drift.
 func TestOpenShiftReleaseAIOImageGraphContract(t *testing.T) {
+	t.Skip("temporarily skipped pending https://github.com/openshift/release/pull/87406; re-enable in a follow-up PR once the CI migration is ready")
+
 	froms := dockerfileFROMImages(t, readDockerfileResourceManager(t))
 	cfg := fetchOpenShiftReleaseYAML[ciOperatorConfig](t, releaseRawBase+ciConfigPath)
 	presubmits := fetchOpenShiftReleaseYAML[presubmitsFile](t, releaseRawBase+presubmitsPath)
