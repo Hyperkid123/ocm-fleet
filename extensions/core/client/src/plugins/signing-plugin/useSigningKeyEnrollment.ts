@@ -9,15 +9,11 @@ import {
   EnrollStep,
   initialState,
 } from "./enrollmentReducer";
-import {
-  detectRegistry,
-  refreshAndGetIdToken,
-  testSign,
-} from "./enrollmentUtils";
+import { detectRegistry, enrollWithOidc, testSign } from "./enrollmentUtils";
 import {
   exportPublicKeyDER,
+  exportSSHPublicKey,
   generateSigningKey,
-  getSigningKeyStatus,
   getStoredPublicKey,
   removeSigningKey,
 } from "./signingKeyApi";
@@ -106,7 +102,11 @@ function useGitHubKeyPolling(
 export function useSigningKeyEnrollment() {
   const auth = useOidcAuth();
   const [state, dispatch] = useReducer(enrollmentReducer, initialState);
-  const initialized = useRef(false);
+  const issuer = auth.user?.profile.iss;
+  const subject = auth.user?.profile.sub;
+  const identityKey = JSON.stringify([issuer, subject]);
+  const currentIdentityKey = useRef(identityKey);
+  currentIdentityKey.current = identityKey;
 
   const githubUsername = state.authMethod?.oidcConfig?.registrySubjectMapping
     ? (((auth.user?.profile as Record<string, unknown>)?.github_username as
@@ -137,104 +137,73 @@ export function useSigningKeyEnrollment() {
     }
   }, [keyFound, ghKeyError]);
 
-  const initialize = useCallback(async () => {
-    try {
-      clearPollingError();
-      const method = await getAuthMethod("default");
-      const reg = detectRegistry(method);
-      dispatch({ type: Action.InitAuth, authMethod: method, registry: reg });
-
-      const status = await getSigningKeyStatus();
-      if (status.enrolled && status.sshPublicKey) {
-        getSetupProgressStore().setStepComplete("signing-key-enrollment", true);
+  const initialize = useCallback(
+    async (isActive: () => boolean = () => true) => {
+      try {
+        clearPollingError();
+        const method = await getAuthMethod("default");
+        if (!isActive()) return;
+        const reg = detectRegistry(method);
+        dispatch({ type: Action.InitAuth, authMethod: method, registry: reg });
+        let publicKey = await getStoredPublicKey();
+        if (!isActive()) return;
+        if (!publicKey) {
+          dispatch({ type: Action.Generating });
+          await generateSigningKey();
+          publicKey = await getStoredPublicKey();
+        }
+        if (!publicKey) throw new Error("No signing key in IndexedDB");
+        const sshPublicKey = await exportSSHPublicKey(publicKey);
+        const derPublicKey = await exportPublicKeyDER(publicKey);
+        // A stored key is not proof of enrollment. Verify it in this workflow.
+        if (isActive())
+          dispatch({ type: Action.ExistingKey, sshPublicKey, derPublicKey });
+      } catch (err) {
+        if (!isActive()) return;
         dispatch({
-          type: Action.ExistingKey,
-          sshPublicKey: status.sshPublicKey,
+          type: Action.Error,
+          error: err instanceof Error ? err.message : "Initialization failed",
         });
-      } else {
-        dispatch({ type: Action.Generating });
-        const key = await generateSigningKey();
-        dispatch({ type: Action.KeyGenerated, sshPublicKey: key });
       }
-    } catch (err) {
-      dispatch({
-        type: Action.Error,
-        error: err instanceof Error ? err.message : "Initialization failed",
-      });
-    }
-  }, [clearPollingError]);
+    },
+    [clearPollingError],
+  );
 
   useEffect(() => {
-    if (initialized.current) return;
-    initialized.current = true;
-    initialize();
+    let active = true;
+    void initialize(() => active);
+    return () => {
+      active = false;
+    };
   }, [initialize]);
 
   const enrollOidc = useCallback(async () => {
     dispatch({ type: Action.EnrollStart });
     try {
-      const pub = await getStoredPublicKey();
-      if (!pub) throw new Error("No signing key in IndexedDB");
-      const derB64 = await exportPublicKeyDER(pub);
-
-      const authority = (auth.settings as { authority?: string }).authority;
-      if (!authority) throw new Error("OIDC authority not available");
-
-      const token = auth.user?.access_token;
-      if (!token) throw new Error("No access token — log in first");
-
-      const headers = {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Authorization: `Bearer ${token}`,
-      };
-
-      const profileResp = await fetch(`${authority}/account`, { headers });
-      if (!profileResp.ok) {
+      if (!state.authMethod?.oidcConfig?.publicKeyClaimExpression) {
         throw new Error(
-          `IdP GET profile returned ${profileResp.status}: ${await profileResp.text()}`,
+          "OIDC signing requires a configured public-key claim CEL expression.",
         );
       }
-      const profile = await profileResp.json();
-      profile.attributes = {
-        ...profile.attributes,
-        signing_public_key: [derB64],
-      };
-      const updateResp = await fetch(`${authority}/account`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(profile),
+      await enrollWithOidc(auth, (enrollmentName) => {
+        if (currentIdentityKey.current === identityKey)
+          dispatch({ type: Action.EnrollSuccess, enrollmentName });
       });
-      if (!updateResp.ok) {
-        throw new Error(
-          `IdP returned ${updateResp.status}: ${await updateResp.text()}`,
-        );
-      }
-
-      const clientId = (auth.settings as { client_id?: string }).client_id;
-      if (!clientId) throw new Error("OIDC client_id not available");
-
-      const freshIdToken = await refreshAndGetIdToken(authority, clientId);
-
-      const enrollment = await createSignerEnrollment({
-        signerEnrollmentId: `browser-${Date.now()}`,
-        identityToken: freshIdToken,
-      });
-      dispatch({
-        type: Action.EnrollSuccess,
-        enrollmentName: enrollment.name,
-      });
-
-      await testSign(freshIdToken);
-      dispatch({ type: Action.VerifySuccess });
-      getSetupProgressStore().setStepComplete("signing-key-enrollment", true);
+      if (currentIdentityKey.current !== identityKey) return;
+      await getSetupProgressStore().setStepComplete(
+        "signing-key-enrollment",
+        true,
+      );
+      if (currentIdentityKey.current === identityKey)
+        dispatch({ type: Action.VerifySuccess });
     } catch (err) {
+      if (currentIdentityKey.current !== identityKey) return;
       dispatch({
         type: Action.Error,
         error: err instanceof Error ? err.message : "Enrollment failed",
       });
     }
-  }, [auth]);
+  }, [auth, state.authMethod, identityKey]);
 
   const enrollGithub = useCallback(async () => {
     dispatch({ type: Action.EnrollStart });
@@ -247,25 +216,34 @@ export function useSigningKeyEnrollment() {
         identityToken: idToken,
         registryId: "github.com",
       });
+      if (currentIdentityKey.current !== identityKey) return;
       dispatch({
         type: Action.EnrollSuccess,
         enrollmentName: enrollment.name,
       });
 
-      const currentIdToken = auth.user?.id_token;
-      if (!currentIdToken) throw new Error("No ID token for test sign");
-      await testSign(currentIdToken);
-      dispatch({ type: Action.VerifySuccess });
-      getSetupProgressStore().setStepComplete("signing-key-enrollment", true);
+      await testSign(idToken);
+      if (currentIdentityKey.current !== identityKey) return;
+      await getSetupProgressStore().setStepComplete(
+        "signing-key-enrollment",
+        true,
+      );
+      if (currentIdentityKey.current === identityKey)
+        dispatch({ type: Action.VerifySuccess });
     } catch (err) {
+      if (currentIdentityKey.current !== identityKey) return;
       dispatch({
         type: Action.Error,
         error: err instanceof Error ? err.message : "Enrollment failed",
       });
     }
-  }, [auth]);
+  }, [auth, identityKey]);
 
   const handleReenroll = useCallback(async () => {
+    await getSetupProgressStore().setStepComplete(
+      "signing-key-enrollment",
+      false,
+    );
     await removeSigningKey();
     dispatch({ type: Action.ReEnroll });
     await initialize();
@@ -296,6 +274,9 @@ export function useSigningKeyEnrollment() {
   return {
     step: state.step,
     sshPublicKey: state.sshPublicKey,
+    derPublicKey: state.derPublicKey,
+    publicKeyClaimExpression:
+      state.authMethod?.oidcConfig?.publicKeyClaimExpression,
     registry: state.registry,
     error: state.error,
     enrollmentName: state.enrollmentName,

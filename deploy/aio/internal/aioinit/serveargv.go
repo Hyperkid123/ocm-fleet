@@ -15,8 +15,8 @@ const (
 	// tokens include the resource-manager audience.
 	DefaultPeerDexUIScope = "openid profile email groups audience:server:client_id:resource-manager"
 	// DefaultExternalIssuerUIScope is the Dex-off browser scope (any other Issuer).
-	// Standard OIDC only: Keycloak and other IdPs reject Dex's
-	// audience:server:client_id:… scope with invalid_scope.
+	// Standard OIDC scopes keep external providers independent of Dex-only
+	// audience:server:client_id:… scopes. Configure external audiences at the provider.
 	DefaultExternalIssuerUIScope = "openid profile email"
 	// DefaultResourceAudience is the ordinary AuthMethod audience.
 	DefaultResourceAudience = "resource-manager"

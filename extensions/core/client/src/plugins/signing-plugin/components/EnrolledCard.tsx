@@ -19,7 +19,7 @@ export type EnrolledCardProps = EnrollmentDLProps & {
 const EnrolledCard = ({
   registry,
   enrollmentName,
-  sshPublicKey,
+  publicKey,
   isSetupFlow = false,
   handleReenroll,
 }: EnrolledCardProps) => {
@@ -41,7 +41,7 @@ const EnrolledCard = ({
           <EnrollmentDL
             registry={registry}
             enrollmentName={enrollmentName}
-            sshPublicKey={sshPublicKey}
+            publicKey={publicKey}
           />
         </CardBody>
       </Card>

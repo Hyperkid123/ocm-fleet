@@ -19,12 +19,12 @@ import {
   setOnUnauthorized,
 } from "../auth/fetchInterceptor";
 import { fetchOidcConfig } from "../auth/oidcConfig";
+import { oidcIdentity } from "../auth/oidcIdentity";
 
 export interface User {
   id: string;
   username: string;
   display_name: string;
-  role: string;
   navLayout: Array<{ path: string; label: string }>;
 }
 
@@ -40,13 +40,7 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-interface OidcProfile {
-  preferred_username?: string;
-  email?: string;
-  realm_access?: { roles?: string[] };
-}
-
-function KeycloakAuthInner({ children }: { children: ReactNode }) {
+export function OidcAuthInner({ children }: { children: ReactNode }) {
   const oidc = useOidcAuth();
   const oidcRef = useRef(oidc);
   oidcRef.current = oidc;
@@ -57,7 +51,7 @@ function KeycloakAuthInner({ children }: { children: ReactNode }) {
   const fetchedForToken = useRef<string | undefined>(undefined);
 
   const accessToken = oidc.user?.access_token;
-  const email = (oidc.user?.profile as OidcProfile | undefined)?.email;
+  const email = oidc.user?.profile.email;
 
   // Keep the fetch interceptor token in sync
   useEffect(() => {
@@ -68,6 +62,8 @@ function KeycloakAuthInner({ children }: { children: ReactNode }) {
     if (oidc.isLoading) return;
 
     if (!oidc.isAuthenticated || !accessToken) {
+      setUser(null);
+      fetchedForToken.current = undefined;
       setLoading(false);
       return;
     }
@@ -76,18 +72,7 @@ function KeycloakAuthInner({ children }: { children: ReactNode }) {
     if (fetchedForToken.current === accessToken) return;
     fetchedForToken.current = accessToken;
 
-    const profile = oidc.user!.profile as OidcProfile;
-    const username = profile.preferred_username ?? "unknown";
-    const roles = profile.realm_access?.roles ?? [];
-    const role = roles.includes("ops") ? "ops" : "dev";
-
-    setUser({
-      id: `user-${username}`,
-      username,
-      display_name: username.charAt(0).toUpperCase() + username.slice(1),
-      role,
-      navLayout: [],
-    });
+    setUser(oidcIdentity(oidc.user!.profile));
     setLoading(false);
   }, [oidc.isLoading, oidc.isAuthenticated, oidc.user, accessToken]);
 
@@ -105,7 +90,8 @@ function KeycloakAuthInner({ children }: { children: ReactNode }) {
     void oidcRef.current.removeUser();
   }, []);
 
-  if (oidc.isLoading) {
+  // Silent renewal sets isLoading too; keep authenticated workflows mounted.
+  if (oidc.isLoading && !oidc.isAuthenticated) {
     return null;
   }
 
@@ -170,7 +156,7 @@ export function AuthProvider({
 
   return (
     <OidcAuthProvider {...oidcProps}>
-      <KeycloakAuthInner>{children}</KeycloakAuthInner>
+      <OidcAuthInner>{children}</OidcAuthInner>
     </OidcAuthProvider>
   );
 }

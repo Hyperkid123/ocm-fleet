@@ -115,11 +115,11 @@ These instructions use the [OpenShift cache example](../deploy/openshift/minio-n
   Desktop on macOS stores creds in the keychain, so its `config.json` won't work;
   the podman `auth.json` above does.)
 
-The `deploy:openshift:minio:*` targets use `KC_CLUSTER_API` to select their OpenShift cluster, the same variable used by the Keycloak example. They require an active `oc` session on that cluster:
+The `deploy:openshift:minio:*` targets use `NX_CACHE_CLUSTER_API` to select their OpenShift cluster. Set it in `.env` to the API URL reported by `oc whoami --show-server`. They require an active `oc` session on that cluster:
 
 ```sh
-# 1. Log in to the Keycloak cluster and set KC_CLUSTER_API in .env
-oc login <keycloak-cluster-api-url>
+# 1. Log in to the cache cluster and set NX_CACHE_CLUSTER_API in .env
+oc login <cache-cluster-api-url>
 
 # 2. Deploy (generates random credentials + bearer tokens, stores in OCP secrets)
 npx nx run deploy:openshift:minio:deploy
@@ -132,6 +132,12 @@ npx nx run deploy:openshift:minio:credentials
 
 # 5. Tear down (interactive)
 npx nx run deploy:openshift:minio:teardown
+```
+
+To override the cluster configured in `.env` for one invocation, pass `NX_CACHE_CLUSTER_API` as a key-value argument:
+
+```sh
+npx nx run deploy:openshift:minio:status -- NX_CACHE_CLUSTER_API=https://api.cache.example.com:6443
 ```
 
 To retrieve credentials later (e.g., on a new machine), log in to the cluster and run `npx nx run deploy:openshift:minio:credentials` — it reads from the existing OCP secrets.

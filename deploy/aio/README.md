@@ -96,7 +96,7 @@ email:
 
 AIO fills omitted AuthMethod/UI fields. These are **packaging** defaults, not
 `resource-manager serve` binary defaults. The [OpenShift deployment example](../openshift/README.md)
-uses a different config surface (`.env` / `KEY_REGISTRY_*`); do not mix the two.
+uses a separate deployment-specific configuration surface; do not mix the two.
 
 **Required from you** — everything else may be left unset.
 
@@ -114,19 +114,11 @@ uses a different config surface (`.env` / `KEY_REGISTRY_*`); do not mix the two.
 | UI client | `OIDC_UI_CLIENT_ID` | `ocm-fleet-console` |
 | UI scope | `OIDC_UI_SCOPE` | Dex-on: `openid profile email groups audience:server:client_id:resource-manager`. Dex-off: `openid profile email` |
 | Resource audience | `OIDC_RESOURCE_AUDIENCE` | `resource-manager` |
-| Enrollment audience | `OIDC_KEY_ENROLLMENT_AUDIENCE` | `resource-manager-signing` |
-| Registry ID | `OIDC_REGISTRY_ID` | `github.com`, unless a public-key claim is set |
-| Registry subject | `OIDC_REGISTRY_SUBJECT_EXPRESSION` | `claims.preferred_username`, unless a public-key claim is set |
-| Public-key claim | `OIDC_PUBLIC_KEY_CLAIM_EXPRESSION` | unset (registry mapping is used instead) |
 | OIDC CA | `OIDC_CA_FILE` | sandbox CA on Dex-on. Dex-off: unset unless discovery/TLS needs non-system trust |
 | Log level | `LOG_LEVEL` | `error`. One control for the resource manager server, peer Dex, and s6 lifecycle verbosity (`debug`, `info`, `warn`, `error`) |
 | Addons | `OCM_RM_SERVER_ADDONS` | `kind,kubernetes` |
 | Container socket | `CONTAINER_HOST` | image default `unix:///var/run/docker.sock`. Override only if the mount path differs |
 | Kind loopback forward | `KIND_LOOPBACK_FORWARD_TO` | Dex-on + live socket: `ocm-fleet:8085`. Set empty to disable. Not written on Dex-off |
-
-If you override registry ID or subject expression, set both. Registry mapping and
-`OIDC_PUBLIC_KEY_CLAIM_EXPRESSION` are mutually exclusive (`resource-manager serve`
-enforces this).
 
 `LOG_LEVEL` is the only AIO logging control. It is passed to the resource manager
 (`--log-level`), rendered into peer Dex's logger, and mapped to s6-overlay
@@ -148,9 +140,10 @@ same serve bootstrap path. The AIO UI/API edge stays
 under `/idp`. Register that origin, `/app/auth/callback`, and
 `/app/silent-renew.html` on the external client. Packaging still fills omitted
 fields above, but UI scope becomes portable OIDC (`openid profile email`)
-instead of Dex cross-client audience scopes that Keycloak rejects as
-`invalid_scope`. Pass `OIDC_CA_FILE` only when discovery/TLS needs non-system
-trust. Issuer URL shape, CA readability/PEM, and registry/claim pairing are
+instead of Dex-specific cross-client audience scopes. Configure API audiences
+through the external provider's supported mechanism; OIDC scopes alone do not
+establish the resource audience. Pass `OIDC_CA_FILE` only when discovery/TLS needs non-system
+trust. Issuer URL shape and CA readability/PEM are
 validated by `resource-manager serve`. Packaging fills omitted AuthMethod/UI defaults
 and forwards the resolved serve argv. The welcome banner still waits for public
 `/readyz`, then shows the console URL and external-IdP text without demo
@@ -164,31 +157,28 @@ Minimal:
 podman run -d \
   -p 127.0.0.1:8085:8085 \
   -p 127.0.0.1:50051:50051 \
-  -e OIDC_ISSUER_URL=https://your-oidc-issuer/realms/ocm-fleet \
+  -e OIDC_ISSUER_URL=https://idp.example.com/tenant/opaque-id \
   quay.io/stolostron/ocm-fleet:latest
 ```
 
-All OIDC overrides (values shown are packaging defaults except issuer/CA and the
-public-key claim alternative):
+All OIDC overrides (values shown are packaging defaults except issuer/CA). This example assumes `provider-ca.crt` exists in
+the current host directory; omit the mount and `OIDC_CA_FILE` for system-trusted
+issuers:
 
 ```bash
 podman run -d \
   -p 127.0.0.1:8085:8085 \
   -p 127.0.0.1:50051:50051 \
-  -e OIDC_ISSUER_URL=https://your-oidc-issuer/realms/ocm-fleet \
-  -e OIDC_CA_FILE=/path/to/ca.crt \
+  -e OIDC_ISSUER_URL=https://idp.example.com/tenant/opaque-id \
+  -v "$PWD/provider-ca.crt:/run/provider-ca.crt:ro" \
+  -e OIDC_CA_FILE=/run/provider-ca.crt \
   -e OIDC_UI_CLIENT_ID=ocm-fleet-console \
   -e OIDC_UI_SCOPE='openid profile email' \
   -e OIDC_RESOURCE_AUDIENCE=resource-manager \
-  -e OIDC_KEY_ENROLLMENT_AUDIENCE=resource-manager-signing \
-  -e OIDC_REGISTRY_ID=github.com \
-  -e OIDC_REGISTRY_SUBJECT_EXPRESSION=claims.preferred_username \
   quay.io/stolostron/ocm-fleet:latest
 ```
 
-To use a public-key claim instead of registry mapping, omit
-`OIDC_REGISTRY_ID` / `OIDC_REGISTRY_SUBJECT_EXPRESSION` and set
-`-e OIDC_PUBLIC_KEY_CLAIM_EXPRESSION=claims.spk`.
+AuthMethod settings apply only to an empty store. Use a separate fresh store to test another issuer; `fleetctl auth setup` only configures local CLI login.
 
 ## With kind
 

@@ -130,7 +130,7 @@ export async function exportSSHPublicKey(
 }
 
 /**
- * Export public key as base64 DER (SPKI) for IdP user attribute storage.
+ * Export public key as base64 DER (SPKI) for provider-specific claim provisioning.
  */
 export async function exportPublicKeyDER(
   publicKey: CryptoKey,
@@ -141,7 +141,7 @@ export async function exportPublicKeyDER(
 
 /**
  * Get the stored public key CryptoKey, if any.
- * Used by enrollment to write to IdP or export for GitHub.
+ * Used by enrollment to display the key for external provider provisioning.
  */
 export async function getStoredPublicKey(): Promise<CryptoKey | null> {
   const kp = await loadKeyPair();

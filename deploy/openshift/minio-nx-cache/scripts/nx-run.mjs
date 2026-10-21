@@ -5,7 +5,7 @@ import {
   requireOcCluster,
 } from "../../../scripts/common.mjs";
 const [command, ...args] = importKeyValueArgs(process.argv.slice(2));
-await requireOcCluster("KC_CLUSTER_API");
+await requireOcCluster("NX_CACHE_CLUSTER_API");
 
 // MinIO commands share cluster validation and namespace conventions.
 if (command === "deploy" || command === "teardown") {

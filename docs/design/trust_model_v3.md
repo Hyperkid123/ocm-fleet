@@ -1237,7 +1237,6 @@ The system can vary:
 * the trust-manifest update policy, from a dedicated threshold authority to any currently verifiable tenant signer;
 * whether continuity rotation receives a fresh OIDC identity binding as an additional factor;
 * whether cold verifiers require a retained transition chain or durable semantic anchor, or may use an explicitly weaker fresh per-user OIDC reanchor;
-* identity-provider signing-key resolution and archival policy;
 * whether trust-map changes are validated eagerly or lazily per identity;
 * whether marker inclusion is validated with the map update or deferred until a delivery depends on it;
 * how eagerly delivery agents receive authenticated-map updates;

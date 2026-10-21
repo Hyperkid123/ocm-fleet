@@ -2,8 +2,10 @@
 
 **Jira**: FM-TBD (pending approval to create)
 **Epic**: SPIKE - User Interface (CLI)
-**Status**: Done
+**Status**: Historical completed proof of concept; not a current authentication reference
 **Related**: [004 - WebAuthn for Delegated Actions](004-webauthn-delegation.md)
+
+Historical exploration, including Keycloak/WebAuthn choices and source paths. For current behavior, see [Console authentication](../authentication.md), the [provenance architecture](../../design/architecture/provenance.md), and the [TypeScript CLI reference](../../../client/cli/README.md). Delegation alternatives remain proposals.
 
 ## Problem
 
@@ -19,7 +21,7 @@ The CLI needs both regular authentication (who are you) and step-up authenticati
 
 The POC implements one possible approach for CLI authentication. The actual auth mechanism will depend on decisions made by the auth team — the IdP, the flow, and the token format may all change. What follows is what was built to have a working auth flow to develop against.
 
-The CLI uses the same identity provider as the GUI (Keycloak) but with a flow designed for CLI tools. Since the CLI cannot render a login page, it opens the user's default browser to the Keycloak login URL. The user authenticates in the browser (with whatever method the IdP supports — password, passkey, SSO, etc.) and Keycloak redirects back to a temporary local HTTP server that the CLI starts on a known port. The CLI captures the authorization code from the redirect and exchanges it for tokens.
+The original POC used the same identity provider as the GUI (Keycloak) with a flow designed for CLI tools. It opened the user's default browser to the provider's discovered authorization endpoint. The user authenticated in the browser (password, passkey, SSO, or another method supported by the IdP), and the provider redirected back to a temporary local HTTP server started by the CLI. The CLI captured the authorization code and exchanged it for tokens.
 
 The flow uses PKCE (Proof Key for Code Exchange) to protect the authorization code exchange. The CLI generates a random code verifier and its SHA-256 hash (the code challenge) before starting the flow. The verifier is sent during the token exchange, proving that the same client that initiated the flow is the one completing it.
 
@@ -43,7 +45,7 @@ Several alternatives were explored:
 
 **PKCS#11 and smart cards.** For enterprise environments that already use smart cards or hardware security modules, Node.js has mature PKCS#11 bindings. The CLI loads the PKCS#11 module, opens a session with the user's smart card, prompts for a PIN, and uses the on-device private key to sign a challenge. This is well-suited for environments with existing PKI infrastructure but too heavy for general use.
 
-### Current state (proof of concept)
+### State at completion of the original proof of concept
 
 The regular OIDC authentication works end to end:
 

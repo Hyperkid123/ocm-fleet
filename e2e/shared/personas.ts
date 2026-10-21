@@ -3,12 +3,11 @@
  * (deploy/aio/internal/aioinit/dexconfig.go, deploy/aio/README.md). These are
  * public sandbox fixtures, not production credentials.
  *
- * Note: the console cannot yet surface an "ops" vs "dev" role under Dex — role
- * is derived from a Keycloak-only `realm_access.roles` claim, so both personas
- * currently resolve to the same role and identical navigation. The only
- * user-visible persona signal today is the masthead user-menu label, which is
- * the capitalized `preferred_username` (see AuthContext.display_name). Proper
- * group-to-role mapping is tracked separately (OME-206).
+ * Persona IDs label sandbox fixtures, not authorization roles. The console
+ * uses standard OIDC identity claims and does not infer ops/dev authorization.
+ * These fixtures share navigation; their masthead labels use the capitalized
+ * `preferred_username`, with standard `name`/email/subject fallbacks. Authorization mapping
+ * is tracked separately (OME-206).
  */
 export type PersonaId = "ops" | "dev";
 

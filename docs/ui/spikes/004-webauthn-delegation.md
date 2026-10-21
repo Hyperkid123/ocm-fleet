@@ -2,7 +2,7 @@
 
 **Status: retired prototype reference.** The former passkey registration and Grant Access pages and mock-server endpoints are not part of the current console. This page preserves an existing inbound reference; it does not define a passkey implementation or delegation contract.
 
-The current console provides [signing-key enrollment](../../../extensions/core/client/src/plugins/signing-plugin/SigningKeyEnrollment.tsx). Enrollment and signature verification must not be equated with blanket permission to act on a user's behalf.
+The former [signing-key enrollment UI](../../../extensions/core/client/src/plugins/signing-plugin/SigningKeyEnrollment.tsx) is no longer registered in the active console; its source remains for possible future provenance-profile integration. Enrollment and signature verification must not be equated with blanket permission to act on a user's behalf.
 
 For current security boundaries and design, see:
 

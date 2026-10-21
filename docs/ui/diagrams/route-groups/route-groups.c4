@@ -62,7 +62,7 @@ model {
     description '''
       Renders pages, expandable groups and More using canonical page references.
       Without saved order, top-level labels sort within Main/Bottom; children keep
-      backend order. Settings and Signing are Bottom; unknown scopes default Main.
+      backend order. Settings is Bottom; unknown scopes default Main.
       Disabled plugins keep links with puzzle icons; missing resolved route icons
       do not remove links. Unknown page IDs are skipped; empty groups are hidden.
       AppNavGroup active/expanded state tests the /groupId/ path prefix, so moved

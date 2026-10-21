@@ -1,49 +1,47 @@
-import type { AuthMethod } from "./api";
+import type { AuthContextProps } from "react-oidc-context";
+
+import { type AuthMethod, createSignerEnrollment } from "./api";
 import { signDeployment } from "./signingKeyApi";
 
 export type RegistryType = "oidc" | "github";
 
 export async function refreshAndGetIdToken(
-  authority: string,
-  clientId: string,
+  auth: Pick<AuthContextProps, "signinSilent">,
 ): Promise<string> {
-  const key = `oidc.user:${authority}:${clientId}`;
-  const raw = sessionStorage.getItem(key);
-  if (!raw) throw new Error("No OIDC session in sessionStorage");
-
-  const session: Record<string, unknown> = JSON.parse(raw);
-  const refreshToken = session.refresh_token as string | undefined;
-  if (!refreshToken) throw new Error("No refresh token in session");
-
-  const tokenUrl = `${authority}/protocol/openid-connect/token`;
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    client_id: clientId,
-    refresh_token: refreshToken,
-  });
-
-  const resp = await fetch(tokenUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Token refresh failed (${resp.status}): ${text}`);
+  let renewed;
+  try {
+    renewed = await auth.signinSilent();
+  } catch (err) {
+    throw new Error(
+      `Unable to renew the OIDC session. Check provider renewal support or sign in again. ${err instanceof Error ? err.message : "Session renewal failed"}`,
+    );
   }
 
-  const tokens = await resp.json();
-  const updated = {
-    ...session,
-    access_token: tokens.access_token,
-    id_token: tokens.id_token,
-    refresh_token: tokens.refresh_token ?? refreshToken,
-  };
-  sessionStorage.setItem(key, JSON.stringify(updated));
+  if (!renewed?.id_token) {
+    throw new Error(
+      "Session renewal returned no ID token. Configure provider ID token support and sign in again.",
+    );
+  }
+  return renewed.id_token;
+}
 
-  if (!tokens.id_token) throw new Error("Refresh did not return an ID token");
-  return tokens.id_token as string;
+export async function enrollWithOidc(
+  auth: Pick<AuthContextProps, "signinSilent">,
+  onEnrolled: (name: string) => void,
+): Promise<void> {
+  const idToken = await refreshAndGetIdToken(auth);
+  try {
+    const enrollment = await createSignerEnrollment({
+      signerEnrollmentId: `browser-${Date.now()}`,
+      identityToken: idToken,
+    });
+    onEnrolled(enrollment.name);
+    await testSign(idToken);
+  } catch (err) {
+    throw new Error(
+      `OIDC signing enrollment failed. Check the provider signing claim against the configured CEL expression. ${err instanceof Error ? err.message : "Verification failed"}`,
+    );
+  }
 }
 
 export async function testSign(idToken: string): Promise<void> {

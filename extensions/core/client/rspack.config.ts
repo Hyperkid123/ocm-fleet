@@ -205,45 +205,6 @@ const CorePlugin = new FleetPlugin({
   },
 });
 
-const SigningPlugin = new FleetPlugin({
-  extensions: [
-    createRoute({
-      id: "signing-keys",
-      label: "Signing Keys",
-      component: { $codeRef: "SigningKeyEnrollment.default" },
-      icon: { $codeRef: "SigningKeysIcon.default" },
-      description: "Manage signing keys for deployment verification",
-      keywords: ["signing", "key", "enrollment", "cosign"],
-    }),
-    createSetup({
-      id: "signing-key-enrollment",
-      label: "Signing Key Enrollment",
-      description:
-        "Enroll signing keys for deployment verification and supply chain security.",
-      path: "enroll",
-      component: { $codeRef: "SigningKeyEnrollment.default" },
-      requires: [],
-      requiresAuth: true,
-    }),
-  ],
-  sharedModules,
-  entryScriptFilename: "plugins/signing/signing-plugin.[contenthash].js",
-  pluginManifestFilename: "plugins/signing/signing-plugin-manifest.json",
-  moduleFederationSettings: mfOverride,
-  pluginMetadata: {
-    name: "signing-plugin",
-    version: "1.0.0",
-    exposedModules: {
-      SigningKeyEnrollment: p(
-        "./src/plugins/signing-plugin/SigningKeyEnrollment.tsx",
-      ),
-      SigningKeysIcon: p("./src/plugins/signing-plugin/SigningKeysIcon.tsx"),
-      useSigningKey: p("./src/plugins/signing-plugin/useSigningKey.ts"),
-      signingKeyApi: p("./src/plugins/signing-plugin/signingKeyApi.ts"),
-    },
-  },
-});
-
 const RoutingPlugin = new FleetPlugin({
   extensions: [],
   sharedModules,
@@ -347,7 +308,7 @@ const SetupPlugin = new FleetPlugin({
       description: "Configure addons and integrations.",
       path: "whats-next",
       component: { $codeRef: "WhatsNextPage.default" },
-      requires: ["signing-key-enrollment"],
+      requires: [],
       requiresAuth: true,
       priority: 100,
     }),
@@ -647,7 +608,6 @@ const pluginConfigs = [
   { plugin: OverviewPlugin, key: "overview" },
   { plugin: ManagementPlugin, key: "management" },
   { plugin: CorePlugin, key: "core" },
-  { plugin: SigningPlugin, key: "signing" },
   { plugin: RoutingPlugin, key: "routing" },
   { plugin: SetupPlugin, key: "setup" },
   { plugin: ConfigurationPlugin, key: "configuration" },

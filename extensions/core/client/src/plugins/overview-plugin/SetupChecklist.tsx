@@ -27,16 +27,6 @@ import { getSetupProgressStore } from "../setup-plugin/setupProgress";
 
 const DISMISS_KEY = "ocm-fleet:setup-checklist-dismissed";
 
-const SETUP_STEPS = [
-  {
-    id: "signing-key-enrollment",
-    label: "Signing key",
-    ctaText: "Enroll signing key",
-    scope: "signing-plugin",
-    module: "SigningKeyEnrollment",
-  },
-];
-
 const CATEGORY_LABELS: Record<string, string> = {
   "ocm-fleet.cluster-provider": "Configure a cluster provider",
 };
@@ -114,10 +104,7 @@ export default function SetupChecklist() {
   );
 
   const items = useMemo<ChecklistItem[]>(() => {
-    const setupItems = SETUP_STEPS.map((step) => ({
-      ...step,
-      completed: !!progress[step.id],
-    }));
+    const setupItems: ChecklistItem[] = [];
 
     const grouped = new Map<string, OnboardingActionExtension[]>();
     const ungrouped: OnboardingActionExtension[] = [];

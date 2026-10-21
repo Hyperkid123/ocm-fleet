@@ -25,6 +25,7 @@ export interface OIDCConfig {
   authorizationEndpoint?: string;
   tokenEndpoint?: string;
   jwksUri?: string;
+  publicKeyClaimExpression?: string;
   registrySubjectMapping?: RegistrySubjectMapping;
 }
 

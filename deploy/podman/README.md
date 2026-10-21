@@ -4,8 +4,7 @@ Compose launcher for the all-in-one image (`quay.io/stolostron/ocm-fleet`)
 under `deploy/podman`: podman + docker-compose via Nx (`deploy:podman:*` targets). One container runs the TLS edge, API, baked-in
 UI, and peer Dex.
 
-This is **not** a multi-service Keycloak/Postgres harness. Packaging internals
-and a raw `podman run` are documented in
+Packaging internals and a raw `podman run` are documented in
 [deploy/aio/README.md](../aio/README.md). Both paths use the same AIO image and
 the same public origin:
 
@@ -66,6 +65,9 @@ bin/fleetctl auth login
 Point at an external issuer by setting `OIDC_ISSUER_URL` in `.env` (peer Dex
 then parks). Register `https://ocm-fleet.localhost:8085`,
 `/app/auth/callback`, and `/app/silent-renew.html` on that IdP.
+See [external-issuer configuration](../aio/README.md#external-issuer-dex-off) for client, audience, and scope settings.
+
+Changing `.env` and restarting does not replace a persisted AuthMethod; configuration applies only to an empty store.
 
 ## Tasks
 

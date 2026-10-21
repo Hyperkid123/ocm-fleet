@@ -38,6 +38,8 @@ const SigningKeyEnrollment = ({
   const {
     step,
     sshPublicKey,
+    derPublicKey,
+    publicKeyClaimExpression,
     registry,
     error,
     enrollmentName,
@@ -49,6 +51,7 @@ const SigningKeyEnrollment = ({
     handleReenroll,
     setGhPollEnabled,
   } = useSigningKeyEnrollment();
+  const publicKey = registry === "github" ? sshPublicKey : derPublicKey;
 
   if (
     step === EnrollStep.Loading ||
@@ -86,7 +89,7 @@ const SigningKeyEnrollment = ({
             <EnrollmentDL
               registry={registry}
               enrollmentName={enrollmentName}
-              sshPublicKey={sshPublicKey}
+              publicKey={publicKey}
             />
           </Alert>
           <div className="pf-v6-u-mt-xl">
@@ -125,13 +128,15 @@ const SigningKeyEnrollment = ({
                 <Icon>
                   <KeyIcon />
                 </Icon>{" "}
-                Your signing key
+                {registry === "github"
+                  ? "Your SSH signing key"
+                  : "Your signing public key (base64 DER/SPKI)"}
               </CardTitle>
             </CardHeader>
             <CardBody>
-              {sshPublicKey && (
+              {publicKey && (
                 <ClipboardCopy isReadOnly isCode>
-                  {sshPublicKey}
+                  {publicKey}
                 </ClipboardCopy>
               )}
             </CardBody>
@@ -147,7 +152,11 @@ const SigningKeyEnrollment = ({
           )}
 
           {registry === "oidc" && (
-            <OIDCEnroll step={step} enrollOidc={enrollOidc} />
+            <OIDCEnroll
+              step={step}
+              enrollOidc={enrollOidc}
+              publicKeyClaimExpression={publicKeyClaimExpression}
+            />
           )}
 
           {onSetupSkip && (

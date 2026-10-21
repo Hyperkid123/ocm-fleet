@@ -9,13 +9,13 @@ import { ReactNode } from "react";
 export type EnrollmentDLProps = {
   enrollmentName?: ReactNode;
   registry: "github" | "oidc";
-  sshPublicKey?: string | null;
+  publicKey?: string | null;
 };
 
 const EnrollmentDL = ({
   enrollmentName,
   registry,
-  sshPublicKey,
+  publicKey,
 }: EnrollmentDLProps) => {
   return (
     <DescriptionList isCompact isHorizontal>
@@ -32,15 +32,15 @@ const EnrollmentDL = ({
         <DescriptionListDescription>
           {registry === "github"
             ? "GitHub SSH signing keys"
-            : "OIDC-hosted keys"}
+            : "OIDC ID token signing claim"}
         </DescriptionListDescription>
       </DescriptionListGroup>
-      {sshPublicKey && (
+      {publicKey && (
         <DescriptionListGroup>
           <DescriptionListTerm>Public key</DescriptionListTerm>
           <DescriptionListDescription>
             <code className="ocm-fleet-signing-setup__pubkey-snippet">
-              {sshPublicKey.slice(0, 60)}...
+              {publicKey.slice(0, 60)}...
             </code>
           </DescriptionListDescription>
         </DescriptionListGroup>
