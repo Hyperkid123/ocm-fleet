@@ -29,6 +29,7 @@ describe("Ink output", () => {
     });
     instance.unmount();
     await instance.waitUntilExit();
-    expect(captured).toBe(`${value}\n`);
+    // Ink adds a blank line when unmounting in CI; the schema text must stay exact.
+    expect([`${value}\n`, `${value}\n\n`]).toContain(captured);
   });
 });
