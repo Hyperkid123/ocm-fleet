@@ -1,8 +1,7 @@
-import { JsonOutput } from "../../ui";
 import type { CommandSpec } from "../types";
 import { deploymentClient, deploymentName } from "./helpers";
 
-export const getCommand: CommandSpec = {
+export const getCommand = {
   path: "deployment get",
   description: "Get deployment by name",
   implemented: true,
@@ -12,6 +11,6 @@ export const getCommand: CommandSpec = {
     const response = await (
       await deploymentClient(args)
     ).request(`/v1alpha/${deploymentName(name)}`);
-    return <JsonOutput value={response} />;
+    return response;
   },
-};
+} satisfies CommandSpec<unknown>;

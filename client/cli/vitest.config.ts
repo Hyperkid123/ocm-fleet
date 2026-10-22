@@ -1,21 +1,22 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
+import { esmExternalRequirePlugin } from "vite";
 import { defineConfig } from "vitest/config";
 
-const configDirectory = path.dirname(fileURLToPath(import.meta.url));
-
 export default defineConfig({
-  resolve: {
-    alias: {
-      "ink-table": path.resolve(
-        configDirectory,
-        "src/test-helpers/ink-table.tsx",
-      ),
-    },
-  },
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     globals: true,
+    deps: {
+      optimizer: {
+        ssr: {
+          enabled: true,
+          include: ["ink-table"],
+          exclude: ["ink"],
+          rolldownOptions: {
+            // ink-table is CommonJS; share the same ESM Ink instance as the tests.
+            plugins: [esmExternalRequirePlugin({ external: ["ink"] })],
+          },
+        },
+      },
+    },
   },
 });

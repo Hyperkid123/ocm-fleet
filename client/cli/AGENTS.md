@@ -11,10 +11,12 @@
 ## Structure
 
 - `src/main.tsx`: process entry point and dispatch.
+- `src/command.tsx`: typed command registration adapter.
+- `src/app.tsx`: output formatting, stdout writes, and Ink rendering.
 - `src/commands/registry.ts`: command registration only.
 - `src/commands/help.ts`: help rendering.
 - `src/commands/<group>/index.ts`: group metadata and child registration.
-- `src/commands/<group>/<command>.tsx`: one command per file when JSX is needed.
+- `src/commands/<group>/<command>.tsx`: one command per file, exporting a typed command spec; use JSX when needed.
 - `src/__tests__/`: Vitest and Ink component tests.
 
 ## Verification

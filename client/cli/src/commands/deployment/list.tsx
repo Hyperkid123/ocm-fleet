@@ -3,15 +3,15 @@ import Table from "ink-table";
 import React from "react";
 
 import { flagString } from "../../argv";
-import { JsonOutput, useOutputFormat } from "../../ui";
 import { clientForArgs } from "../context";
 import type { CommandSpec } from "../types";
 import type { DeploymentListResponse } from "./types";
 
-export const listCommand: CommandSpec = {
+export const listCommand = {
   path: "deployment list",
   description: "List deployments",
   implemented: true,
+  present: (data) => <DeploymentListView data={data} />,
   run: async ({ args }) => {
     const query = new URLSearchParams();
     const pageSize = flagString(args, "page-size");
@@ -24,18 +24,15 @@ export const listCommand: CommandSpec = {
         method: "GET",
       },
     );
-    return <DeploymentListOutput deployments={response.deployments ?? []} />;
+    return response.deployments ?? [];
   },
-};
+} satisfies CommandSpec<NonNullable<DeploymentListResponse["deployments"]>>;
 
-function DeploymentListOutput({
-  deployments,
+export function DeploymentListView({
+  data: deployments,
 }: {
-  deployments: NonNullable<DeploymentListResponse["deployments"]>;
+  data: NonNullable<DeploymentListResponse["deployments"]>;
 }): React.ReactElement {
-  if (useOutputFormat() === "json") {
-    return <JsonOutput value={deployments} />;
-  }
   const tableData = deployments.map((deployment) => ({
     name: deployment.name,
     state: deployment.state ?? "UNKNOWN",

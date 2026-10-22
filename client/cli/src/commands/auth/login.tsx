@@ -2,9 +2,10 @@ import { runAuthLogin } from "../../auth/login";
 import { Output } from "../../ui";
 import type { CommandSpec } from "../types";
 
-export const loginCommand: CommandSpec = {
+export const loginCommand = {
   path: "auth login",
   description: "Authenticate with configured OIDC provider",
   implemented: true,
-  run: async ({ args }) => <Output value={await runAuthLogin(args)} />,
-};
+  present: (data) => <Output data={data} />,
+  run: async ({ args }) => runAuthLogin(args),
+} satisfies CommandSpec<string>;

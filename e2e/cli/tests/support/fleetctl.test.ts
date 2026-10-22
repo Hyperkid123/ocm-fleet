@@ -35,6 +35,18 @@ describe("fleetctl support", () => {
     expect(parseAuthURLLine("waiting")).toBeNull();
   });
 
+  it("can request human output for schema discovery without duplicate output flags", () => {
+    const args = buildFleetctlArgs(
+      "/private/config",
+      "127.0.0.1:50051",
+      ["resource", "types"],
+      "table",
+    );
+
+    expect(args.filter((arg) => arg === "--output")).toHaveLength(1);
+    expect(args.slice(-4)).toEqual(["--output", "table", "resource", "types"]);
+  });
+
   it("guards malformed credentials", () => {
     expect(parseAccessToken('{"access_token":"token"}')).toBe("token");
     expect(() => parseAccessToken("{}")).toThrow("access_token");

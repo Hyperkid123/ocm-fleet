@@ -4,11 +4,10 @@ import {
   buildDeploymentEnvelope,
   signDeploymentEnvelope,
 } from "../../crypto/signing";
-import { JsonOutput } from "../../ui";
 import type { CommandSpec } from "../types";
 import { deploymentClient, deploymentName } from "./helpers";
 
-export const resumeCommand: CommandSpec = {
+export const resumeCommand = {
   path: "deployment resume",
   description: "Resume deployment paused for authentication",
   implemented: true,
@@ -65,6 +64,6 @@ export const resumeCommand: CommandSpec = {
         body: JSON.stringify(body),
       },
     );
-    return <JsonOutput value={response} />;
+    return response;
   },
-};
+} satisfies CommandSpec<unknown>;

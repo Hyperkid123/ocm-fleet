@@ -1,10 +1,9 @@
 import { flagString } from "../../argv";
-import { JsonOutput } from "../../ui";
 import { clientForArgs } from "../context";
 import type { CommandSpec } from "../types";
 import { resourceRoute } from "./helpers";
 
-export const listCommand: CommandSpec = {
+export const listCommand = {
   path: "resource list",
   description: "List managed resources of a type",
   implemented: true,
@@ -21,9 +20,9 @@ export const listCommand: CommandSpec = {
       await clientForArgs(args)
     ).request(`${route.path}${query.size ? `?${query}` : ""}`);
     const resources = listResources(response, route.collection);
-    return <JsonOutput value={resources} />;
+    return resources;
   },
-};
+} satisfies CommandSpec<unknown>;
 
 function listResources(response: unknown, collection: string): unknown {
   if (

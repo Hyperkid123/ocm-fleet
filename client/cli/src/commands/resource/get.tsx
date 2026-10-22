@@ -1,9 +1,8 @@
-import { JsonOutput } from "../../ui";
 import { clientForArgs } from "../context";
 import type { CommandSpec } from "../types";
 import { resourceRoute } from "./helpers";
 
-export const getCommand: CommandSpec = {
+export const getCommand = {
   path: "resource get",
   description: "Get a managed resource by id",
   implemented: true,
@@ -15,6 +14,6 @@ export const getCommand: CommandSpec = {
     const response = await (
       await clientForArgs(args)
     ).request(`${route.path}/${encodeURIComponent(id)}`);
-    return <JsonOutput value={response} />;
+    return response;
   },
-};
+} satisfies CommandSpec<unknown>;

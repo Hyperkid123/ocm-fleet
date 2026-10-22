@@ -5,10 +5,6 @@ export default defineConfig({
   resolve: {
     alias: {
       "@ocm-fleet/common": path.resolve(__dirname, "sdk/common/src"),
-      "ink-table": path.resolve(
-        __dirname,
-        "client/cli/src/test-helpers/ink-table.tsx",
-      ),
     },
   },
   test: {
@@ -17,6 +13,7 @@ export default defineConfig({
       "./client/*/src/**/__tests__/**/*.test.ts",
       "./extensions/**/src/**/__tests__/**/*.test.ts",
     ],
+    exclude: ["./client/cli/**"],
     globals: true,
   },
 });

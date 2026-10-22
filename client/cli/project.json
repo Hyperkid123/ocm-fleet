@@ -7,6 +7,7 @@
   "targets": {
     "build": {
       "executor": "nx:run-commands",
+      "dependsOn": ["typecheck"],
       "outputs": ["{projectRoot}/bin", "{workspaceRoot}/bin/fleetctl"],
       "inputs": [
         "{projectRoot}/src/**/*",
@@ -20,9 +21,29 @@
     },
     "test": {
       "executor": "nx:run-commands",
-      "inputs": ["{projectRoot}/src/**/*", "{projectRoot}/vitest.config.ts"],
+      "dependsOn": ["build"],
+      "inputs": [
+        "{projectRoot}/src/**/*",
+        "{projectRoot}/vitest.config.ts",
+        "{projectRoot}/rspack.config.ts",
+        "{projectRoot}/tsconfig.json",
+        "{workspaceRoot}/tsconfig.json"
+      ],
       "options": {
         "command": "vitest run --config vitest.config.ts",
+        "cwd": "client/cli"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/src/**/*",
+        "{projectRoot}/tsconfig.json",
+        "{workspaceRoot}/tsconfig.json"
+      ],
+      "options": {
+        "command": "tsc --noEmit -p tsconfig.json",
         "cwd": "client/cli"
       }
     },

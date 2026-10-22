@@ -1,35 +1,36 @@
 /* eslint-disable playwright/no-standalone-expect */
-import { PassThrough } from "node:stream";
+import { cleanup, render } from "ink-testing-library";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { render as renderInk } from "ink";
-import { render } from "ink-testing-library";
-import { describe, expect, it } from "vitest";
+import { DeploymentListView } from "../commands/deployment/list";
+import { Output } from "../ui";
 
-import { Output, PlainOutput } from "../ui";
+afterEach(cleanup);
 
 describe("Ink output", () => {
   it("renders command output in terminal frame", () => {
-    const instance = render(<Output value="fleetctl ready" />);
+    const instance = render(<Output data="fleetctl ready" />);
     expect(instance.lastFrame()).toContain("fleetctl ready");
   });
 
-  it("preserves complete schema identifiers in redirected output", async () => {
-    const stdout = new PassThrough();
-    let captured = "";
-    stdout.on("data", (chunk) => {
-      captured += chunk.toString();
-    });
-    const value = [
-      "TYPE\tSINGULAR\tSERVICE",
-      "ocm.kind.v1alpha/clusters\tCluster\tocm.kind.v1alpha.ClusterService",
-    ].join("\n");
-    const instance = renderInk(<PlainOutput value={value} />, {
-      stdout,
-      patchConsole: false,
-    });
-    instance.unmount();
-    await instance.waitUntilExit();
-    // Ink adds a blank line when unmounting in CI; the schema text must stay exact.
-    expect([`${value}\n`, `${value}\n\n`]).toContain(captured);
+  it("renders deployment data with human defaults and a JSON hint", () => {
+    const instance = render(
+      <DeploymentListView data={[{ name: "example" }]} />,
+    );
+
+    expect(instance.lastFrame()).toContain("example");
+    expect(instance.lastFrame()).toContain("UNKNOWN");
+    expect(instance.lastFrame()).toContain("NONE");
+    expect(instance.lastFrame()).toContain(
+      "Use --output json for full details.",
+    );
+  });
+
+  it("renders the empty deployment list", () => {
+    const instance = render(<DeploymentListView data={[]} />);
+
+    expect(instance.lastFrame()).toContain(
+      "Use --output json for full details.",
+    );
   });
 });

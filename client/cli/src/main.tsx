@@ -1,9 +1,9 @@
 import { performance } from "node:perf_hooks";
 
-import { print } from "./app";
+import { executeCommand, print, printView } from "./app";
 import { hasFlag, outputFormat, parseArgs } from "./argv";
 import { helpText } from "./commands/help";
-import { commandSpecs, findCommand } from "./commands/registry";
+import { commandEntries, findCommand } from "./commands/registry";
 import { Output } from "./ui";
 
 const startedAt = performance.now();
@@ -14,30 +14,29 @@ const debugEnabled =
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  const command = args.command.join(" ");
+  const commandPath = args.command.join(" ");
   if (
     hasFlag(args, "help") ||
-    !command ||
-    commandSpecs.some(
+    !commandPath ||
+    commandEntries.some(
       (item) =>
-        item.path === command && !item.implemented && !item.path.includes(" "),
+        item.path === commandPath &&
+        !item.implemented &&
+        !item.path.includes(" "),
     )
   ) {
-    await print(<Output value={helpText(command || undefined)} />);
+    await printView(<Output data={helpText(commandPath || undefined)} />);
     return;
   }
 
-  const spec = findCommand(args.command);
-  if (!spec) throw new Error(`Unknown command.\n\n${helpText()}`);
-  if (!spec.implemented)
-    throw new Error(`${spec.path} is not implemented yet.`);
-  if (!spec.run)
-    throw new Error(
-      `${spec.path} command wiring pending API contract migration.`,
-    );
-
+  const command = findCommand(args.command);
+  if (!command) throw new Error(`Unknown command.\n\n${helpText()}`);
+  if (!command.implemented)
+    throw new Error(`${command.path} is not implemented yet.`);
   const output = outputFormat(args);
-  await print(await spec.run({ args, output }), output);
+  await print(
+    await command.withSpec((spec) => executeCommand(spec, { args }, output)),
+  );
 }
 
 main()

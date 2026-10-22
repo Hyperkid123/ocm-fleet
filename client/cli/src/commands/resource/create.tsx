@@ -1,10 +1,9 @@
 import { flagString } from "../../argv";
-import { JsonOutput } from "../../ui";
 import { clientForArgs } from "../context";
 import type { CommandSpec } from "../types";
 import { resourceID, resourceRoute, resourceSpec } from "./helpers";
 
-export const createCommand: CommandSpec = {
+export const createCommand = {
   path: "resource create",
   description: "Create a managed resource",
   implemented: true,
@@ -23,6 +22,6 @@ export const createCommand: CommandSpec = {
         body: JSON.stringify({ spec: await resourceSpec(specFile) }),
       },
     );
-    return <JsonOutput value={response} />;
+    return response;
   },
-};
+} satisfies CommandSpec<unknown>;

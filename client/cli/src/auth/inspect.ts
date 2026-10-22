@@ -54,11 +54,7 @@ export async function inspectStoredTokens(
   return result;
 }
 
-export function formatTokenInspection(
-  inspection: TokenInspection,
-  output: string,
-): string {
-  if (output === "json") return JSON.stringify(inspection, null, 2);
+export function formatTokenInspection(inspection: TokenInspection): string {
   const lines = [
     `Token Type:     ${inspection.token_type}`,
     `Expiry:         ${inspection.expiry}`,

@@ -1,8 +1,11 @@
-import { describeResourceType, listResourceTypes } from "../../grpc/reflection";
-import { PlainOutput } from "../../ui";
+import {
+  describeResourceType,
+  listResourceTypes,
+  type ReflectedResourceType,
+} from "../../grpc/reflection";
 import type { CommandSpec } from "../types";
 
-export const describeCommand: CommandSpec = {
+export const describeCommand = {
   path: "resource describe",
   description: "Show managed resource schema",
   implemented: true,
@@ -16,20 +19,22 @@ export const describeCommand: CommandSpec = {
     );
     if (!type) throw new Error(`unknown resource type ${requested}`);
     const description = await describeResourceType(type, args);
-    return (
-      <PlainOutput
-        value={[
-          `Type:     ${type.qualifiedName}`,
-          `Singular: ${type.singular}`,
-          `Service:  ${type.serviceName}`,
-          "",
-          "Methods:",
-          ...description.methods.map((method) => `  ${method}`),
-          "",
-          `Spec (${description.specType}):`,
-          ...description.fields.map((field) => `  ${field}`),
-        ].join("\n")}
-      />
-    );
+    return { type, ...description };
   },
-};
+  present: ({ type, methods, specType, fields }) =>
+    [
+      `Type:     ${type.qualifiedName}`,
+      `Singular: ${type.singular}`,
+      `Service:  ${type.serviceName}`,
+      "",
+      "Methods:",
+      ...methods.map((method) => `  ${method}`),
+      "",
+      `Spec (${specType}):`,
+      ...fields.map((field) => `  ${field}`),
+    ].join("\n"),
+} satisfies CommandSpec<
+  Awaited<ReturnType<typeof describeResourceType>> & {
+    type: ReflectedResourceType;
+  }
+>;

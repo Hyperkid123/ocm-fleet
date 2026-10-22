@@ -3,10 +3,11 @@ import { clientForArgs } from "../context";
 import type { CommandSpec } from "../types";
 import { resourceRoute } from "./helpers";
 
-export const deleteCommand: CommandSpec = {
+export const deleteCommand = {
   path: "resource delete",
   description: "Delete a managed resource",
   implemented: true,
+  present: (data) => <Output data={data} />,
   run: async ({ args }) => {
     const type = args.positionals[0];
     const id = args.positionals[1];
@@ -15,6 +16,6 @@ export const deleteCommand: CommandSpec = {
     await (
       await clientForArgs(args)
     ).request(`${route.path}/${encodeURIComponent(id)}`, { method: "DELETE" });
-    return <Output value="Deleted." />;
+    return "Deleted.";
   },
-};
+} satisfies CommandSpec<string>;

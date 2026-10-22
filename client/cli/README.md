@@ -198,6 +198,10 @@ npx nx run cli:test
 npx nx run cli:lint
 ```
 
+Build and test also run `cli:typecheck`, including compile-time tests for
+runner/presenter compatibility. The test target builds the executable before
+running subprocess tests against a local HTTP server, with no external services.
+
 CLI E2E harness runs TypeScript `fleetctl` by default and uses same AIO login/browser/scenario flow:
 
 ```bash

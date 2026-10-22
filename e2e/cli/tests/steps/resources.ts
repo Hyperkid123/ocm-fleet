@@ -66,7 +66,9 @@ export class ResourceDiscoverySteps {
   }
 
   async typesIncludeKindClusterAndNode(): Promise<void> {
-    const result = await this.#client.succeed(["resource", "types"]);
+    const result = await this.#client.succeed(["resource", "types"], {
+      output: "table",
+    });
     const rows = parseResourceTypeRows(result.stdout);
     expect(
       rows.some(
@@ -83,14 +85,26 @@ export class ResourceDiscoverySteps {
       ),
       `Kind Node type in:\n${result.stdout}`,
     ).toBe(true);
+
+    const json = await this.#client.succeed(["resource", "types"]);
+    expect(JSON.parse(json.stdout)).toEqual(
+      expect.arrayContaining(
+        rows.map((row) =>
+          expect.objectContaining({
+            qualifiedName: row.type,
+            singular: row.singular,
+            serviceName: row.service,
+          }),
+        ),
+      ),
+    );
   }
 
   async expectKindClusterSchema(): Promise<void> {
-    const result = await this.#client.succeed([
-      "resource",
-      "describe",
-      KIND_CLUSTER_TYPE,
-    ]);
+    const result = await this.#client.succeed(
+      ["resource", "describe", KIND_CLUSTER_TYPE],
+      { output: "table" },
+    );
     const described = parseResourceDescribe(result.stdout);
     expect(described.type).toBe(KIND_CLUSTER_TYPE);
     for (const method of REQUIRED_METHODS) {
@@ -106,5 +120,21 @@ export class ResourceDiscoverySteps {
         `spec field ${field} in ${described.fieldNames.join(", ")}`,
       ).toContain(field);
     }
+
+    const json = await this.#client.succeed([
+      "resource",
+      "describe",
+      KIND_CLUSTER_TYPE,
+    ]);
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      type: { qualifiedName: described.type },
+      methods: described.methods,
+      specType: described.specType,
+      fields: expect.arrayContaining(
+        REQUIRED_SPEC_FIELDS.map((field) =>
+          expect.stringContaining(` ${field} = `),
+        ),
+      ),
+    });
   }
 }

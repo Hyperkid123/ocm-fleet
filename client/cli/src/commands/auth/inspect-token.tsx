@@ -1,17 +1,19 @@
 import { formatTokenInspection, inspectStoredTokens } from "../../auth/inspect";
-import { JsonOutput, Output } from "../../ui";
+import { Output } from "../../ui";
 import type { CommandSpec } from "../types";
 
-export const inspectTokenCommand: CommandSpec = {
+export const inspectTokenCommand = {
   path: "auth inspect-token",
   description: "Decode and display stored authentication tokens",
   implemented: true,
-  run: async ({ args, output }) => {
-    const inspection = await inspectStoredTokens(args);
-    return output === "json" ? (
-      <JsonOutput value={inspection} />
-    ) : (
-      <Output value={formatTokenInspection(inspection, output)} />
-    );
-  },
-};
+  run: async ({ args }) => inspectStoredTokens(args),
+  present: (data) => <TokenInspectionView data={data} />,
+} satisfies CommandSpec<Awaited<ReturnType<typeof inspectStoredTokens>>>;
+
+function TokenInspectionView({
+  data,
+}: {
+  data: Awaited<ReturnType<typeof inspectStoredTokens>>;
+}) {
+  return <Output data={formatTokenInspection(data)} />;
+}

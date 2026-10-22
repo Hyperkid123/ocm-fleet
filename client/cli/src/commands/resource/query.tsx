@@ -1,9 +1,8 @@
 import { flagString } from "../../argv";
-import { JsonOutput } from "../../ui";
 import { clientForArgs } from "../context";
 import type { CommandSpec } from "../types";
 
-export const queryCommand: CommandSpec = {
+export const queryCommand = {
   path: "resource query",
   aliases: ["search"],
   description: "Query managed resources with CEL filter",
@@ -22,6 +21,6 @@ export const queryCommand: CommandSpec = {
     ).request(
       `/apis/open-cluster-management.io/v1alpha/${encodeURIComponent(scope)}:queryResources?${params}`,
     );
-    return <JsonOutput value={response} />;
+    return response;
   },
-};
+} satisfies CommandSpec<unknown>;

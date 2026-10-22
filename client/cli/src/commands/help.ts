@@ -1,9 +1,9 @@
-import { commandSpecs } from "./registry";
+import { commandEntries } from "./registry";
 
 export function helpText(command?: string): string {
   const entries = command
-    ? commandSpecs.filter((item) => item.path.startsWith(`${command} `))
-    : commandSpecs.filter((item) => !item.path.includes(" "));
+    ? commandEntries.filter((item) => item.path.startsWith(`${command} `))
+    : commandEntries.filter((item) => !item.path.includes(" "));
   const lines = [
     command
       ? `Usage: fleetctl ${command} <command>`
