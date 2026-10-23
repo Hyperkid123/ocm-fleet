@@ -22,7 +22,7 @@
     "build:ci": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "rm -rf dist node_modules/.cache && for name in overview management core signing routing setup configuration virtualization addon-demo settings; do echo \"--- $name ---\" && rspack build --config-name $name || exit 1; done",
+        "command": "rm -rf dist node_modules/.cache && for name in overview management core routing setup configuration virtualization addon-demo settings; do echo \"--- $name ---\" && rspack build --config-name $name || exit 1; done",
         "cwd": "extensions/core/client"
       },
       "inputs": [

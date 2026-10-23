@@ -80,6 +80,14 @@ durable provenance mechanisms themselves.
 
 ## Credential Verification
 
+### Generic OIDC integration
+
+OIDC integration uses configured issuers, discovery/JWKS, clients, and accepted audiences without depending on provider-specific account APIs. Login support does not imply support for enrollment or other optional IdP capabilities. API authorization remains the resource manager server's responsibility.
+
+See [Console authentication](../ui/authentication.md) for current login behavior and [provenance architecture](architecture/provenance.md) for durable signing and verification profiles.
+
+### Verification requirements
+
 A credential method is a well-known verifier selected through authenticated
 authority configuration. A credential may expose tentative scheme, authority,
 subject, or tenant claims for lookup, but those values become authoritative
@@ -443,8 +451,11 @@ tokens to particular clusters, we need separate audiences for those. More IdP
 configuration to do. Hard to make dynamic. Token Exchange (RFC 8693) can
 address this: exchange a platform-audience token for a target-audience token
 at the IdP. The IdP controls policy (which exchanges are allowed, for which
-audiences). This avoids per-cluster client IDs but requires IdP support
-(Keycloak, Dex have it; Auth0/Okta partial).
+audiences). This avoids per-cluster client IDs but requires an explicitly
+supported token-exchange capability and policy for the selected provider and
+version. Ordinary OIDC discovery/login does not imply RFC 8693 support. Dex's
+cross-client trust and `audience:server:client_id:…` scope mechanism is a
+separate audience mechanism, not a portable token-exchange contract.
 
 ### IdP bootstrap and recovery
 

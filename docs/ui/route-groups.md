@@ -135,7 +135,7 @@ Source: [UI configuration handlers](../../server/internal/transport/http/uiconfi
 
 `CORE_EXTENSION_META` remains keyed by plugin scope. A plugin-defined group's main/bottom section is inferred from `${pluginKey}-plugin`, and its children stay in that section. Custom groups default to the main section. Plugin-defined group headers are label-only; custom groups have an icon-rendering path with the limitations described in [Navigation Customization](nav-customization.md).
 
-With no full override or legacy saved order, top-level pages and groups sort alphabetically by display label **within each section**. Group children retain backend order, not alphabetical order. `signing-plugin` and `settings-plugin` are classified Bottom; all other scopes, including new scopes absent from `CORE_EXTENSION_META`, default Main. A saved legacy order puts listed IDs first and sorts remaining entries by label. With a full override, `mergeLayout` preserves the user's arrangement and incorporates new pages; see [Navigation Customization](nav-customization.md#reconciliation-with-backend-navigation).
+With no full override or legacy saved order, top-level pages and groups sort alphabetically by display label **within each section**. Group children retain backend order, not alphabetical order. `settings-plugin` is classified Bottom; all other scopes, including new scopes absent from `CORE_EXTENSION_META`, default Main. A saved legacy order puts listed IDs first and sorts remaining entries by label. With a full override, `mergeLayout` preserves the user's arrangement and incorporates new pages; see [Navigation Customization](nav-customization.md#reconciliation-with-backend-navigation).
 
 ### Visibility, enablement, and load states
 

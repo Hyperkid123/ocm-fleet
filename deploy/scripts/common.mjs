@@ -81,6 +81,7 @@ export function importKeyValueArgs(args) {
   const keys = new Set([
     "OCM_FLEET_CLUSTER_API",
     "KC_CLUSTER_API",
+    "NX_CACHE_CLUSTER_API",
     "CLUSTER_NAME",
     "ACME_EMAIL",
     "POSTGRES_USER",

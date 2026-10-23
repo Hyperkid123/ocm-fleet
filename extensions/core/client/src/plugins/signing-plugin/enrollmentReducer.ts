@@ -15,7 +15,6 @@ export enum Action {
   InitAuth,
   ExistingKey,
   Generating,
-  KeyGenerated,
   EnrollStart,
   EnrollSuccess,
   VerifySuccess,
@@ -28,6 +27,7 @@ export enum Action {
 export interface EnrollmentState {
   step: EnrollStep;
   sshPublicKey: string | null;
+  derPublicKey: string | null;
   registry: RegistryType;
   authMethod: AuthMethod | null;
   error: string | null;
@@ -37,9 +37,12 @@ export interface EnrollmentState {
 
 export type EnrollmentAction =
   | { type: Action.InitAuth; authMethod: AuthMethod; registry: RegistryType }
-  | { type: Action.ExistingKey; sshPublicKey: string }
+  | {
+      type: Action.ExistingKey;
+      sshPublicKey: string;
+      derPublicKey: string;
+    }
   | { type: Action.Generating }
-  | { type: Action.KeyGenerated; sshPublicKey: string }
   | { type: Action.EnrollStart }
   | { type: Action.EnrollSuccess; enrollmentName: string }
   | { type: Action.VerifySuccess }
@@ -51,6 +54,7 @@ export type EnrollmentAction =
 export const initialState: EnrollmentState = {
   step: EnrollStep.Loading,
   sshPublicKey: null,
+  derPublicKey: null,
   registry: "oidc",
   authMethod: null,
   error: null,
@@ -73,18 +77,21 @@ export function enrollmentReducer(
       return {
         ...state,
         sshPublicKey: action.sshPublicKey,
+        derPublicKey: action.derPublicKey,
+        enrollmentName: null,
         step: EnrollStep.RegisterKey,
+        error: null,
+        ghPollEnabled: false,
       };
     case Action.Generating:
       return { ...state, step: EnrollStep.Generating };
-    case Action.KeyGenerated:
+    case Action.EnrollStart:
       return {
         ...state,
-        sshPublicKey: action.sshPublicKey,
-        step: EnrollStep.RegisterKey,
+        step: EnrollStep.Enrolling,
+        error: null,
+        enrollmentName: null,
       };
-    case Action.EnrollStart:
-      return { ...state, step: EnrollStep.Enrolling };
     case Action.EnrollSuccess:
       return {
         ...state,
@@ -94,7 +101,12 @@ export function enrollmentReducer(
     case Action.VerifySuccess:
       return { ...state, step: EnrollStep.Enrolled };
     case Action.Error:
-      return { ...state, step: EnrollStep.Error, error: action.error };
+      return {
+        ...state,
+        step: EnrollStep.Error,
+        error: action.error,
+        enrollmentName: null,
+      };
     case Action.Retry:
       return {
         ...state,
@@ -105,6 +117,7 @@ export function enrollmentReducer(
       return {
         ...state,
         sshPublicKey: null,
+        derPublicKey: null,
         enrollmentName: null,
         ghPollEnabled: false,
         step: EnrollStep.Loading,

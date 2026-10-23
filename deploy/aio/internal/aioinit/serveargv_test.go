@@ -54,13 +54,16 @@ func TestApplyServeDefaults_ExplicitAddonsWin(t *testing.T) {
 func TestApplyServeDefaults_ExternalIssuerUsesPortableUIScope(t *testing.T) {
 	in := aioinit.ApplyServeDefaults(aioinit.ServeConfig{
 		Endpoints: aioinit.FixedEndpoints,
-		Issuer:    "https://keycloak.example/realms/ocm-fleet",
+		Issuer:    "https://idp.example.com/tenant/opaque-id",
 	})
 	if in.UIScope != aioinit.DefaultExternalIssuerUIScope {
 		t.Fatalf("UIScope = %q, want %q", in.UIScope, aioinit.DefaultExternalIssuerUIScope)
 	}
 	args := aioinit.ServeArgs(in)
 	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "--oidc-issuer\x00https://idp.example.com/tenant/opaque-id") {
+		t.Fatalf("external issuer path must be preserved: %v", args)
+	}
 	want := "--oidc-ui-scope\x00" + aioinit.DefaultExternalIssuerUIScope
 	if !strings.Contains(joined, want) {
 		t.Fatalf("args missing %q in %v", want, args)
@@ -73,7 +76,7 @@ func TestApplyServeDefaults_ExternalIssuerUsesPortableUIScope(t *testing.T) {
 func TestApplyServeDefaults_ExplicitUIScopeWinsOnExternalIssuer(t *testing.T) {
 	in := aioinit.ApplyServeDefaults(aioinit.ServeConfig{
 		Endpoints: aioinit.FixedEndpoints,
-		Issuer:    "https://keycloak.example/realms/ocm-fleet",
+		Issuer:    "https://idp.example.com/tenant/opaque-id",
 		UIScope:   "openid profile email groups",
 	})
 	if in.UIScope != "openid profile email groups" {
