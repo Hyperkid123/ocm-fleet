@@ -10,6 +10,13 @@ export interface CommandContext {
 /** Performs the command's work and returns data for the output layer. */
 export type CommandRunner<Data> = (context: CommandContext) => Promise<Data>;
 
+/** Supported root values for human presentation; nested children belong in elements. */
+export type CommandPresenterOutput =
+  ReactElement | string | number | bigint | boolean | null | undefined;
+
+/** Produces a scalar or element for human output; keep React hooks in elements. */
+export type CommandPresenter<Data> = (data: Data) => CommandPresenterOutput;
+
 /** Names and help text shared by runnable commands and command groups. */
 interface CommandMetadata {
   path: string;
@@ -17,12 +24,12 @@ interface CommandMetadata {
   description: string;
 }
 
-/** Defines a runnable command whose runner and optional presenter share one data type. */
+/** Defines a runnable command whose runner and human presenter share one data type. */
 export interface CommandSpec<Data> extends CommandMetadata {
   implemented: true;
   run: CommandRunner<Data>;
-  /** Produces human output; keep React hooks inside returned components. */
-  present?: (data: Data) => string | ReactElement;
+  /** Optional human-oriented Ink/React child presentation. */
+  present?: CommandPresenter<Data>;
 }
 
 /** Stores a runnable command in the registry, preserving typed access to its spec. */

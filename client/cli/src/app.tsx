@@ -1,19 +1,42 @@
 import type { Writable } from "node:stream";
 
 import { render } from "ink";
-import type { ReactElement, ReactNode } from "react";
+import { dump } from "js-yaml";
+import type { ReactNode } from "react";
 
 import type { OutputFormat } from "./argv";
-import type { CommandContext, CommandSpec } from "./commands/types";
+import type {
+  CommandContext,
+  CommandPresenter,
+  CommandPresenterOutput,
+  CommandSpec,
+} from "./commands/types";
+
+interface FormatterRegistry {
+  component: <Data>(
+    data: Data,
+    present?: CommandPresenter<Data>,
+  ) => CommandPresenterOutput;
+  json: <Data>(data: Data) => string;
+  yaml: <Data>(data: Data) => string;
+}
+
+const serializeJson = (data: unknown): string =>
+  JSON.stringify(data, null, 2) ?? "null";
+
+const formatters: FormatterRegistry = {
+  component: (data, present) => (present ? present(data) : serializeJson(data)),
+  json: (data) => serializeJson(data),
+  yaml: (data) => dump(data === undefined ? null : data).replace(/\n$/, ""),
+};
 
 export async function executeCommand<Data>(
   spec: CommandSpec<Data>,
   context: CommandContext,
-  output: OutputFormat = "table",
-): Promise<ReactElement | string> {
+  output: OutputFormat = "component",
+): Promise<CommandPresenterOutput> {
   const data = await spec.run(context);
-  if (output === "table" && spec.present) return spec.present(data);
-  return JSON.stringify(data, null, 2) ?? "null";
+  return formatters[output](data, spec.present);
 }
 
 /** Write exact text without terminal wrapping that would split identifiers. */
@@ -35,9 +58,22 @@ export async function writeText(
   });
 }
 
-export async function print(content: ReactElement | string): Promise<void> {
-  if (typeof content === "string") await writeText(content);
-  else await printView(content);
+export async function print(
+  content: CommandPresenterOutput,
+  stdout: Writable = process.stdout,
+): Promise<void> {
+  if (
+    typeof content === "string" ||
+    typeof content === "number" ||
+    typeof content === "bigint" ||
+    typeof content === "boolean" ||
+    content === null ||
+    content === undefined
+  ) {
+    await writeText(String(content), stdout);
+  } else {
+    await printView(content);
+  }
 }
 
 export async function printView(element: ReactNode): Promise<void> {
