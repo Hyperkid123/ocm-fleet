@@ -6,7 +6,7 @@
 - Keep command groups under `src/commands/<group>/`.
 - Keep every command in its own file.
 - Keep parser, rendering, config, and transport code outside command groups.
-- Do not add shared SDK or plugin loading yet.
+- Shared SDK and dynamic plugin loading are in scope for the CLI. Use the SDK-compatible Scalprum Node runtime loader (`@scalprum/node-loader`, injected via `initialize({ appsConfig, loader })`) with remotes produced by `@ocm-fleet/node-plugin`; do not hand-roll a separate remote-loading mechanism.
 
 ## Structure
 
