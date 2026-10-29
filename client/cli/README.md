@@ -202,7 +202,7 @@ Build and test also run `cli:typecheck`, including compile-time tests for
 runner/presenter compatibility. The test target builds the executable before
 running subprocess tests against a local HTTP server, with no external services.
 
-CLI E2E harness runs TypeScript `fleetctl` by default and uses same AIO login/browser/scenario flow:
+CLI product E2E harness runs TypeScript `fleetctl` by default and uses same AIO login/browser/scenario flow:
 
 ```bash
 npx nx test:e2e e2e-cli -- --grep "login"
@@ -211,9 +211,46 @@ npx nx test:e2e e2e-cli
 
 E2E requires Podman keyring quotas and a clean AIO sandbox.
 
+### Node federation plugin acceptance
+
+Run the localhost-only production CLI plugin acceptance harness without AIO,
+Podman, Kind, or a production plugin registry:
+
+```bash
+npx nx run e2e-cli:test:plugin
+```
+
+The target builds the production `fleetctl` executable and a Node remote using
+`@ocm-fleet/node-plugin`, then serves the SDK manifest and remote assets over
+HTTP on an ephemeral `127.0.0.1` port. It executes the built CLI through its
+production `plugin run` command. `FLEETCTL_PLUGIN_BASE_URL` selects the asset
+directory; the CLI resolves `<plugin-name>-manifest.json` there. No production
+registry endpoint or automatic discovery is configured.
+Remote command code executes inside `fleetctl` with its process permissions;
+configure only a trusted plugin asset source.
+
+The CLI keeps direct build-time dependencies on `@module-federation/enhanced`
+and `@module-federation/node`: `src/plugins/runtime.ts` imports Enhanced's
+`init` and the Node runtime plugin directly. `@scalprum/node-loader` supplies
+the injected manifest/remote loader but does not expose those APIs, so these
+are not redundant transitive dependencies.
+
+```bash
+FLEETCTL_PLUGIN_BASE_URL=https://plugins.example.invalid/fleetctl/ \
+  fleetctl plugin run sample-plugin --module command
+```
+
+The remote exposes a default Ink command component. `--module` selects another
+exposed module (default `command`), and `--retry` retries one failed module load
+in the same CLI process. The harness covers manifest validation through Scalprum
+`getModule`, `baseURL: "auto"` resolution, Enhanced remote
+registration/initialization, exposed-module loading, live Ink state rendering,
+missing entry and readiness failures, retry after readiness eviction, and
+null/undefined command exports.
+
 ## Current Migration Surface
 
-Implemented command handlers cover auth setup/login/logout/inspect/enroll, deployment CRUD/resume/signing, resource CRUD/query, and reflection-backed resource types/schema discovery.
+Implemented command handlers cover auth setup/login/logout/inspect/enroll, deployment CRUD/resume/signing, resource CRUD/query, reflection-backed resource types/schema discovery, and explicit Node federation plugin execution (`plugin run`).
 
 ## Cleanup
 

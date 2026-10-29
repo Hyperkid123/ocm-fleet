@@ -52,6 +52,7 @@
     },
     "lint": {
       "executor": "nx:run-commands",
+      "inputs": ["uiSource", "eslintConfig"],
       "options": {
         "command": "eslint \"client/cli/src/**/*.{ts,tsx}\"",
         "cwd": "."
